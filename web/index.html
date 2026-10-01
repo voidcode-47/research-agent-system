@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>研究助手 - 多智能体系统</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div class="layout">
+  <!-- ======================= 侧边栏 ======================= -->
+  <aside class="sidebar">
+    <div class="brand">🔬 研究助手</div>
+    <nav id="nav">
+      <button class="nav-item active" data-page="chat">💬 智能对话</button>
+      <button class="nav-item" data-page="research">🔬 多智能体研究</button>
+      <button class="nav-item" data-page="knowledge">📚 知识库</button>
+      <button class="nav-item" data-page="settings">⚙️ 设置</button>
+    </nav>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">🤖 模型配置</div>
+      <label class="lbl">提供商</label>
+      <select id="provider-select" class="input"></select>
+      <label class="lbl">模型</label>
+      <select id="model-select" class="input"><option value="">加载中...</option></select>
+      <div id="custom-fields" class="hidden">
+        <label class="lbl">Base URL</label>
+        <input id="custom-base" class="input" placeholder="https://api.example.com/v1">
+        <label class="lbl">API Key</label>
+        <input id="custom-key" class="input" type="password" placeholder="sk-...">
+        <label class="lbl">模型名</label>
+        <input id="custom-model" class="input" placeholder="模型 ID">
+      </div>
+      <div class="btn-row">
+        <button id="btn-test" class="btn">🔗 测试连接</button>
+        <button id="btn-save" class="btn">💾 保存</button>
+      </div>
+      <div id="conn-status"></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <span class="dot dot-on"></span> v2.0 · 本地运行<br>
+      <span class="dot" id="srv-dot"></span> <span id="srv-txt">连接中...</span>
+    </div>
+  </aside>
+
+  <!-- ======================= 主内容区 ======================= -->
+  <main class="content">
+
+    <!-- ===== 对话页 ===== -->
+    <section id="view-chat" class="view active">
+      <div class="view-header">
+        <h1>💬 智能对话</h1>
+        <div class="chat-controls">
+          <select id="chat-mode" class="input" style="width:auto;">
+            <option value="auto">⚡ 自动（推荐）</option>
+            <option value="deep">🔍 深度检索</option>
+            <option value="chat">💬 纯聊天</option>
+          </select>
+          <select id="chat-tools" class="input" style="width:auto;" multiple size="1" title="深度检索时启用的工具（Ctrl 多选）">
+            <option value="web_search_cn" selected>网页搜索(国内)</option>
+            <option value="academic_search" selected>学术检索</option>
+            <option value="web_scraper" selected>网页抓取</option>
+            <option value="web_search">网页搜索(国际)</option>
+          </select>
+          <label class="chk"><input type="checkbox" id="chat-rag"> 知识库</label>
+          <button id="btn-clear-chat" class="btn btn-ghost">🗑️ 清空</button>
+        </div>
+      </div>
+      <div id="chat-messages" class="chat-area">
+        <div class="chat-hint">输入问题开始对话。普通问题快速回答，研究类问题自动深度检索。</div>
+      </div>
+      <div class="chat-input-row">
+        <input id="chat-input" class="input" placeholder="输入你的问题，回车发送..." autocomplete="off">
+        <button id="btn-send" class="btn">发送</button>
+      </div>
+    </section>
+
+    <!-- ===== 研究页 ===== -->
+    <section id="view-research" class="view">
+      <div class="view-header"><h1>🔬 多智能体研究</h1></div>
+      <div class="card">
+        <label class="lbl">研究主题</label>
+        <textarea id="research-topic" class="input" rows="3"
+          placeholder="例如：2024 年大语言模型推理优化的最新进展"></textarea>
+        <details class="adv">
+          <summary>⚙️ 高级配置</summary>
+          <div class="adv-grid">
+            <div>
+              <label class="lbl">最大迭代次数 <span id="v-iters"></span></label>
+              <input type="range" id="iters" min="3" max="15" value="8">
+            </div>
+            <div>
+              <label class="lbl">单次检索条数 <span id="v-results"></span></label>
+              <input type="range" id="results" min="2" max="10" value="5">
+            </div>
+          </div>
+          <label class="chk"><input type="checkbox" id="rag-use"> 启用本地知识库</label>
+          <label class="chk"><input type="checkbox" id="pre-search" checked> ⚡ 并行预检索（更快更全）</label>
+          <label class="chk"><input type="checkbox" id="auto-ingest" checked> 📥 研究后自动入库 OA 论文</label>
+          <label class="lbl">报告详细度</label>
+          <select id="report-style" class="input" style="width:auto;">
+            <option value="detailed">📕 详细版（推荐本地模型）</option>
+            <option value="standard">📄 标准版</option>
+          </select>
+        </details>
+        <button id="btn-research" class="btn btn-primary btn-block">🚀 开始研究</button>
+      </div>
+
+      <div id="research-progress" class="card hidden">
+        <div class="section-title">🔄 研究进度</div>
+        <div id="research-logs" class="log-area"></div>
+      </div>
+
+      <div id="research-result" class="card hidden">
+        <div class="section-title">📋 研究报告</div>
+        <div class="result-actions">
+          <button id="btn-dl-md" class="btn">💾 下载 Markdown</button>
+          <button id="btn-dl-docx" class="btn">📄 下载 Word</button>
+          <button id="btn-copy" class="btn">📋 复制</button>
+        </div>
+        <div id="report-body" class="markdown"></div>
+        <div class="followup">
+          <input id="followup-input" class="input" placeholder="追问，如：第三部分展开讲讲 / 补充国外案例">
+          <button id="btn-followup" class="btn">发送追问</button>
+        </div>
+        <div id="followup-answer" class="markdown"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">📂 历史报告</div>
+        <div id="report-list"><div class="muted">加载中...</div></div>
+      </div>
+    </section>
+
+    <!-- ===== 知识库页 ===== -->
+    <section id="view-knowledge" class="view">
+      <div class="view-header"><h1>📚 知识库管理</h1></div>
+      <div id="kb-status"></div>
+
+      <div class="card">
+        <div class="section-title">📁 集合管理</div>
+        <div class="row">
+          <input id="kb-new-name" class="input" placeholder="新建知识库名称，如 arxiv_papers">
+          <button id="btn-kb-create" class="btn">创建</button>
+        </div>
+        <div id="kb-collections"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">📤 上传文档</div>
+        <label class="lbl">目标知识库</label>
+        <select id="kb-upload-collection" class="input" style="width:auto;"></select>
+        <input type="file" id="kb-files" class="input" multiple accept=".pdf,.txt,.md,.html">
+        <button id="btn-kb-upload" class="btn">📥 入库</button>
+        <div id="kb-upload-result"></div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">🌐 URL 抓取</div>
+        <div class="row">
+          <input id="kb-url" class="input" placeholder="https://example.com/article">
+          <button id="btn-kb-url" class="btn">抓取入库</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">🔍 检索测试</div>
+        <div class="row">
+          <input id="kb-query" class="input" placeholder="输入查询词">
+          <select id="kb-search-collection" class="input" style="width:auto;"></select>
+          <button id="btn-kb-search" class="btn">检索</button>
+        </div>
+        <div id="kb-search-result"></div>
+      </div>
+    </section>
+
+    <!-- ===== 设置页 ===== -->
+    <section id="view-settings" class="view">
+      <div class="view-header"><h1>⚙️ 设置</h1></div>
+      <div class="card">
+        <div class="section-title">🧩 运行环境</div>
+        <table class="kv">
+          <tr><td>当前提供商</td><td id="set-provider">-</td></tr>
+          <tr><td>当前模型</td><td id="set-model">-</td></tr>
+          <tr><td>服务状态</td><td id="set-srv">-</td></tr>
+          <tr><td>自定义 API</td><td id="set-custom">-</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <div class="section-title">📁 数据位置</div>
+        <table class="kv">
+          <tr><td>历史报告</td><td><code>data/reports/</code></td></tr>
+          <tr><td>知识库向量</td><td><code>data/chroma_db/</code>（别删）</td></tr>
+          <tr><td>论文 PDF</td><td><code>data/papers/</code></td></tr>
+          <tr><td>界面配置</td><td><code>data/ui_prefs.json</code></td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <div class="section-title">💡 小贴士</div>
+        <ul class="tips">
+          <li>模型配置在左侧边栏，改完点「保存」</li>
+          <li>页面切换零刷新，瞬时完成</li>
+          <li>历史报告可在研究页直接删除，无需进文件夹</li>
+        </ul>
+      </div>
+    </section>
+
+  </main>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>

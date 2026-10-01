@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual env
+venv/
+env/
+ENV/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Test / cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated reports (runtime artifacts; dir auto-created on startup)
+data/reports/
+
+# Data
+data/chroma_db/*
+data/uploads/*
+data/cache/*
+!data/chroma_db/.gitkeep
+!data/uploads/.gitkeep
+!data/cache/.gitkeep
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Trae
+.trae/
