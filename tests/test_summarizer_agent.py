@@ -62,5 +62,27 @@ class TestSummarizerAgent:
         llm.chat.side_effect = RuntimeError("服务不可用")
         agent = SummarizerAgent(llm, detailed=True)
         result = agent.node_fn()(_state())
-        assert "报告生成失败" in result["summary"]
-        assert "分析内容" in result["summary"]
+        # 生成失败时不能把错误文本当成"报告"返回（否则质检只看长度会放行）
+        assert result["summary"] == ""
+        assert result["report_failed"] is True
+        assert "报告生成失败" in result["error"]
+        assert result["status"] == "summary_failed"
+
+    def test_skips_report_when_research_empty(self):
+        """研究员没收集到资料时必须跳过报告生成，不得产出无来源的报告。"""
+        llm = MagicMock()
+        agent = SummarizerAgent(llm, detailed=True)
+        state = {
+            "query": "测试主题",
+            "research_data": [],
+            "analysis": "",
+            "conflicts": ["LLM 调用失败"],
+            "research_failed": True,
+            "error": "LLM 调用失败",
+            "sources": [],
+        }
+        result = agent.node_fn()(state)
+        assert result["summary"] == ""
+        assert result["report_failed"] is True
+        assert result["status"] == "summary_failed"
+        llm.chat.assert_not_called()

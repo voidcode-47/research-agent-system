@@ -24,6 +24,88 @@ _ITEM_NUM_RE = re.compile(r"^\s*(\d+)\s*[\.、]\s*(.+)$")     # 1. 标题 或 1�
 _ITEM_BRACKET_RE = re.compile(r"^\s*\[(\d+)\]\s*(.+)$")       # [1] 标题
 _ITEM_DASH_RE = re.compile(r"^\s*[-*]\s+(.+)$")               # - 标题
 
+# 检索工具输出的条目行：
+#  - 学术检索: "[1] 标题" / "    https://doi.org/..."
+#  - 网页检索: "1. 标题" / "   来源: https://..."
+_ITEM_BRACKET_LINE_RE = re.compile(r"^\s*\[\d+\]\s*(.+)$")
+_ITEM_DOT_LINE_RE = re.compile(r"^\s*(\d+)\s*[\.、]\s*(.+)$")
+_URL_RE = re.compile(r"https?://\S+")
+_DOI_RE = re.compile(r"10\.\d{4,9}/[^\s]+")
+_SRC_LINE_RE = re.compile(r"^\s*来源[:：]\s*(\S+)$")
+
+
+def build_reference_list(research_data: list[str]) -> str:
+    """从研究员收集的原始资料文本中提取统一编号的可引用文献清单。
+
+    研究员会同时使用多个检索工具，输出编号各自独立（学术检索用 [n]、
+    网页检索用 n.），拼接后编号冲突，小模型据此生成的引用必然错乱。
+    本函数把全部条目重新统一编号并去重，供总结员作为唯一的引用池。
+
+    Args:
+        research_data: 研究员收集的文本列表（工具输出原文）。
+
+    Returns:
+        形如 "[1] 标题 | 来源\n[2] 标题 | 来源..." 的清单字符串；
+        提取不到任何条目时返回空字符串。
+    """
+    items: list[tuple[str, str]] = []  # (title, source)
+
+    def _push(title: str, source: str) -> None:
+        title = re.sub(r"\s+", " ", title or "").strip()
+        source = (source or "").strip()
+        if not title:
+            return
+        # 去重：标题前 40 字符相同，或来源（URL/DOI）相同
+        for t, s in items:
+            if source and s and source == s:
+                return
+            if title[:40] == t[:40]:
+                return
+        items.append((title, source))
+
+    for chunk in research_data:
+        if not chunk or not chunk.strip():
+            continue
+        lines = chunk.splitlines()
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            title = None
+            # 学术检索条目行: "[1] 标题"
+            bm = _ITEM_BRACKET_LINE_RE.match(line)
+            if bm and re.match(r"^\[\d+\]\s", line):
+                title = bm.group(1)
+            else:
+                # 网页检索条目行: "1. 标题" 或 "1、标题"
+                dm = _ITEM_DOT_LINE_RE.match(line)
+                if dm:
+                    title = dm.group(2)
+            if not title:
+                i += 1
+                continue
+            # 向后扫描最多 4 行找来源（URL / DOI / 来源: xx）
+            source = ""
+            for j in range(i + 1, min(i + 5, len(lines))):
+                sl = lines[j].strip()
+                sm = _SRC_LINE_RE.match(sl)
+                if sm:
+                    source = sm.group(1)
+                    break
+                um = _URL_RE.search(sl)
+                if um:
+                    source = um.group(0)
+                    break
+                dm = _DOI_RE.search(sl)
+                if dm:
+                    source = "https://doi.org/" + dm.group(0)
+                    break
+            _push(title, source)
+            i += 1
+
+    if not items:
+        return ""
+    return "\n".join(f"[{n}] {t}{' | ' + s if s else ''}" for n, (t, s) in enumerate(items, 1))
+
 
 def extract_citations(body: str) -> list[int]:
     """正文中 [n] 按首次出现顺序去重。"""
@@ -61,6 +143,19 @@ def _parse_ref_items(ref_section: str) -> list[tuple[int | None, str]]:
     return items
 
 
+def _drop_invalid_citations(body: str, cite_seq: list[int], valid_numbers: set[int]) -> str:
+    """移除正文中『无对应参考文献条目』的 [n] 引用标记（保留周围文字）。
+
+    小模型常编造超出清单的引用编号（如清单只有 1 条却写 [5]）。
+    这些编号无法对应任何条目，保留只会让报告"引用悬空"；
+    确定性移除比保留错误引用更安全，也不编造新内容。
+    """
+    for n in cite_seq:
+        if n not in valid_numbers:
+            body = re.sub(rf"\[{n}\]", "", body)
+    return body
+
+
 def _remap_body_citations(body: str, mapping: dict[int, int]) -> str:
     """将正文中的 [old] 替换为 [new]，保持连写 [1][2] 逐段替换。"""
     if not mapping:
@@ -93,13 +188,6 @@ def normalize_report_references(md: str) -> str:
     if not items:
         return md  # 无可用条目，不冒险改动
 
-    # 情形 A：条目不足正文所需编号 → 无法建立完整映射，保守返回原文
-    if max(cite_seq) > len(items):
-        logger.warning("报告引用规范化跳过：参考文献条目数 %d < 正文最大引用编号 %d",
-                       len(items), max(cite_seq))
-        return md
-
-    # 情形 B：按正文首次出现顺序重排条目
     # 建立「原编号 → 内容」映射：显式编号条目用显式编号；
     # 无编号条目按其在列表中的位置隐含编号（第 1 条=1，第 2 条=2……）。
     num_to_item: dict[int, str] = {}
@@ -111,9 +199,25 @@ def normalize_report_references(md: str) -> str:
             num_to_item[implicit] = content
             implicit += 1
 
+    valid_numbers = {n for n in num_to_item}
+    valid_cite_seq = [n for n in cite_seq if n in valid_numbers]
+
+    if not valid_cite_seq:
+        # 所有引用编号都无对应条目：移除全部引用标记，条目按原顺序保留
+        logger.warning("报告引用规范化：正文引用全部无对应条目，移除引用标记")
+        return _CITE_RE.sub("", body) + ref_section
+
+    if len(valid_cite_seq) != len(cite_seq):
+        # 部分引用编号无对应条目（模型编造，如条目 1 条却写 [5]）：
+        # 确定性移除这些悬空引用，避免"正文引用但参考文献没有"
+        logger.warning("报告引用规范化：移除 %d 个无对应条目的引用编号",
+                       len(cite_seq) - len(valid_cite_seq))
+        body = _drop_invalid_citations(body, cite_seq, valid_numbers)
+
+    # 按正文首次出现顺序重排条目（仅有效引用）
     used: set[int] = set()
     ordered: list[str] = []
-    for new_no, old_no in enumerate(cite_seq, 1):
+    for new_no, old_no in enumerate(valid_cite_seq, 1):
         if old_no in num_to_item and old_no not in used:
             ordered.append(f"{new_no}. {num_to_item[old_no]}")
             used.add(old_no)
@@ -128,7 +232,7 @@ def normalize_report_references(md: str) -> str:
             tail.append(f"{counter}. {num_to_item[n]}")
     ordered.extend(tail)
 
-    mapping = {old_no: new_no for new_no, old_no in enumerate(cite_seq, 1)}
+    mapping = {old_no: new_no for new_no, old_no in enumerate(valid_cite_seq, 1)}
     new_body = _remap_body_citations(body, mapping)
 
     heading = m.group(0)

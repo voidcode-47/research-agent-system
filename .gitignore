@@ -47,6 +47,9 @@ data/reports/
 data/chroma_db/*
 data/uploads/*
 data/cache/*
+data/papers/
+data/ui_prefs.json
+data/kb_names.json
 !data/chroma_db/.gitkeep
 !data/uploads/.gitkeep
 !data/cache/.gitkeep

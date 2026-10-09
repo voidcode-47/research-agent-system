@@ -67,15 +67,15 @@ class PaperIngestTool(BaseTool):
         title = (msg.get("title") or [""])[0].strip()
         year = None
         for k in ("published-print", "published-online", "published", "issued"):
-            dp = msg.get(k, {}).get("date-parts")
+            dp = (msg.get(k) or {}).get("date-parts")
             if dp and dp[0]:
                 year = dp[0][0]
                 break
         journal = (msg.get("container-title") or [""])[0].strip()
         # 备选：Crossref link 字段（部分出版商标注了 PDF 链接）
         pdf_url = ""
-        for link in msg.get("link", []) or []:
-            if link.get("content-type") == "application/pdf":
+        for link in msg.get("link") or []:
+            if isinstance(link, dict) and link.get("content-type") == "application/pdf":
                 pdf_url = link.get("URL", "")
                 break
         return {
@@ -130,13 +130,24 @@ class PaperIngestTool(BaseTool):
         ) as r:
             r.raise_for_status()
             size = 0
-            with open(dest, "wb") as f:
-                for chunk in r.iter_content(chunk_size=64 * 1024):
-                    f.write(chunk)
-                    size += len(chunk)
-                    if size > _MAX_PDF_BYTES:
-                        return False
-        return dest.stat().st_size > 1024
+            too_large = False
+            try:
+                with open(dest, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=64 * 1024):
+                        f.write(chunk)
+                        size += len(chunk)
+                        if size > _MAX_PDF_BYTES:
+                            too_large = True
+                            break
+            except Exception:
+                # 写入失败同样清理，避免留下半个文件占位
+                dest.unlink(missing_ok=True)
+                raise
+            if too_large:
+                # 必须在文件关闭后再删：Windows 上删除仍被占用的文件会报错
+                dest.unlink(missing_ok=True)
+                return False
+        return size > 1024
 
     def execute(self, doi_or_url: str) -> str:
         """执行论文入库。"""

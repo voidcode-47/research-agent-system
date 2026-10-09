@@ -12,6 +12,9 @@ _UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
+# HTML 响应体上限：超过则截断，避免病态页面耗尽内存
+_MAX_HTML_BYTES = 5 * 1024 * 1024
+
 
 class WebScraperTool(BaseTool):
     """网页正文提取，剔除导航/广告。"""
@@ -37,7 +40,7 @@ class WebScraperTool(BaseTool):
         """抓取网页 HTML。
 
         优先 requests + 浏览器 UA（兼容更多网站，如部分有反爬/UA 校验的站点），
-        失败回退 trafilatura.fetch_url。
+        失败回退 trafilatura.fetch_url。响应体流式读取并截断，避免超大页面吃满内存。
         """
         try:
             import requests
@@ -48,10 +51,28 @@ class WebScraperTool(BaseTool):
                     "Accept-Language": "zh-CN,zh;q=0.9",
                 },
                 timeout=20,
+                stream=True,
             )
-            if resp.status_code == 200 and resp.text:
-                return resp.text
-            logger.debug(f"requests 抓取状态码 {resp.status_code}: {url}")
+            try:
+                if resp.status_code == 200:
+                    chunks = []
+                    size = 0
+                    for chunk in resp.iter_content(chunk_size=64 * 1024):
+                        if not chunk:
+                            continue
+                        chunks.append(chunk)
+                        size += len(chunk)
+                        if size >= _MAX_HTML_BYTES:
+                            logger.debug(
+                                f"网页超过 {_MAX_HTML_BYTES // (1024 * 1024)}MB 上限，已截断: {url}"
+                            )
+                            break
+                    if chunks:
+                        encoding = resp.encoding or resp.apparent_encoding or "utf-8"
+                        return b"".join(chunks).decode(encoding, errors="replace")
+                logger.debug(f"requests 抓取状态码 {resp.status_code}: {url}")
+            finally:
+                resp.close()
         except Exception as e:
             logger.debug(f"requests 抓取失败 {url}: {e}")
 

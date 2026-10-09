@@ -58,8 +58,15 @@ class OpenAICompatibleLLM(BaseLLM):
         self.api_key = api_key or "local"
         self.base_url = base_url.rstrip("/")
         self.is_local = is_local
-        # 先创建对话 client（超时 60s 留给长推理），再做模型自动发现
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url, timeout=60.0)
+        # 先创建对话 client（超时 60s 留给长推理），再做模型自动发现。
+        # max_retries=0：重试统一由 chat 上的 @retry 负责，
+        # 否则 SDK 默认重试 2 次 × 装饰器 3 次 = 最多 9 次请求，成倍消耗配额
+        self.client = OpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=60.0,
+            max_retries=0,
+        )
         # 本地服务 model 为空时延迟自动发现（短超时探测，不阻塞页面）
         if is_local and not self.model:
             discovered = self._discover_model()

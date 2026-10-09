@@ -42,8 +42,28 @@ class VectorStore:
         # 注意：不向 chroma 传 embedding_function，全部显式传 embeddings
 
     def get_or_create_collection(self, name: str):
-        """获取或创建集合（不绑定 chroma 侧 embedding 函数）。"""
-        return self._client.get_or_create_collection(name=name)
+        """获取或创建集合（余弦空间，不绑定 chroma 侧 embedding 函数）。
+
+        显式指定 cosine：Chroma 默认 l2，其返回值是平方欧氏距离，
+        与"相似度"语义不同，直接换算会得到错误分数。已有集合保留原空间，
+        由 _distance_to_score 按实际空间换算。
+        """
+        return self._client.get_or_create_collection(
+            name=name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    @staticmethod
+    def _distance_to_score(dist: float, space: Optional[str]) -> float:
+        """把 Chroma 距离换算为 0-1 相似度（越大越相似）。
+
+        cosine / ip 空间的距离本身就是 1-相似度，直接取补；
+        l2 空间返回平方欧氏距离，用 1/(1+d) 做单调映射到 (0, 1]。
+        """
+        d = max(0.0, float(dist))
+        if space in ("cosine", "ip"):
+            return max(0.0, min(1.0, 1.0 - d))
+        return 1.0 / (1.0 + d)
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         """批量 embedding。"""
@@ -112,6 +132,7 @@ class VectorStore:
             [{"content": str, "metadata": dict, "score": float}]
         """
         collection = self.get_or_create_collection(collection_name)
+        space = (collection.metadata or {}).get("hnsw:space")
         count = collection.count()
         if count == 0:
             return []
@@ -128,7 +149,7 @@ class VectorStore:
             for i, doc in enumerate(results["documents"][0]):
                 meta = results["metadatas"][0][i] if results["metadatas"] else {}
                 dist = results["distances"][0][i] if results["distances"] else 0
-                score = max(0.0, 1.0 - float(dist))  # 距离转相似度
+                score = self._distance_to_score(dist, space)
                 docs.append({
                     "content": doc,
                     "metadata": meta,

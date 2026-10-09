@@ -32,6 +32,16 @@ class AnalystAgent:
             research_data = state.get("research_data", [])
             logger.info(f"[分析员] 开始分析 {len(research_data)} 条资料")
 
+            # 没有资料就没什么可分析的，避免让模型凭空发挥
+            if not research_data:
+                logger.warning("[分析员] 无研究资料，跳过分析")
+                return {
+                    "analysis": "",
+                    "research_failed": True,
+                    "status": "analysis_skipped",
+                    "current_agent": "summarizer",
+                }
+
             # 拼接研究资料
             research_text = "\n\n---\n\n".join(research_data)
 
@@ -78,8 +88,9 @@ class AnalystAgent:
                 logger.error(f"分析失败: {e}")
                 analysis = f"分析过程出错: {e}\n\n原始资料:\n{research_text}"
 
-            # 检测矛盾
-            conflicts = state.get("conflicts", [])
+            # 检测矛盾（复制一份再改：state 里的列表是按引用持有的，
+            # 原地 append 会在质量检查回退重跑时不断累积重复项）
+            conflicts = list(state.get("conflicts", []))
             if "矛盾" in analysis or "冲突" in analysis:
                 conflicts.append("分析中发现信息矛盾")
 

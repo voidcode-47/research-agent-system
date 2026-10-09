@@ -6,6 +6,7 @@
 性能说明：openai 包导入约 2.4 秒，因此延迟到 create() 时才导入，
 避免拖慢页面首屏加载。
 """
+import re
 from typing import Optional
 
 from config.settings import settings
@@ -29,9 +30,10 @@ def normalize_base_url(url: str) -> str:
     """规范化 OpenAI 兼容 Base URL。
 
     - 去掉尾部多余路径（/chat/completions、/completions、/chat）
-    - 不以 /v1 结尾时自动补 /v1
+    - 仅在路径中没有版本段时补 /v1
     例如：https://x.com → https://x.com/v1
           https://x.com/v1/chat/completions → https://x.com/v1
+          https://open.bigmodel.cn/api/paas/v4 → 原样保留
     """
     base = (url or "").strip().rstrip("/")
     if not base:
@@ -40,21 +42,26 @@ def normalize_base_url(url: str) -> str:
         if base.endswith(suffix):
             base = base[: -len(suffix)].rstrip("/")
             break
-    if not base.endswith("/v1"):
-        base += "/v1"
-    return base
+    # 已有版本段（/v1、/v4、/v1beta…）或 /openai 子路径时原样使用：
+    # 盲目追加 /v1 会拼出 .../v4/v1 这类不存在的端点，导致全部请求 404
+    if re.search(r"/v\d+[A-Za-z0-9.]*$", base) or base.endswith("/openai"):
+        return base
+    return base + "/v1"
 
 
 class LLMFactory:
     """LLM 工厂，统一管理多提供商。"""
 
     @staticmethod
-    def create(provider: Optional[str] = None, model: Optional[str] = None) -> BaseLLM:
+    def create(provider: Optional[str] = None, model: Optional[str] = None,
+               api_key: Optional[str] = None, base_url: Optional[str] = None) -> BaseLLM:
         """创建指定提供商的 LLM 实例。
 
         Args:
-            provider: 提供商名称 (openai/zhipu/qwen/deepseek/ollama/lmstudio)
+            provider: 提供商名称 (zhipu/qwen/deepseek/custom/ollama/lmstudio)
             model: 模型名，留空用默认；本地服务空模型会自动发现
+            api_key: 临时覆盖 API Key（前端刚填写、尚未保存时用于测试连接）
+            base_url: 临时覆盖 Base URL
 
         Returns:
             BaseLLM 实例
@@ -68,7 +75,11 @@ class LLMFactory:
         elif is_local and provider == "lmstudio":
             chosen_model = settings.LMSTUDIO_MODEL  # 空串 = 自动发现
         elif is_local and provider == "ollama":
-            chosen_model = model or settings.OLLAMA_MODEL
+            chosen_model = settings.OLLAMA_MODEL
+        elif provider == "custom":
+            # 未显式传模型时回退到 .env 中保存的自定义模型名，
+            # 否则保存过的 CUSTOM_API_MODEL 是死配置（如健康检查不带 model 时会直接报未配置）
+            chosen_model = settings.CUSTOM_API_MODEL
         else:
             chosen_model = config["default_model"]
 
@@ -80,31 +91,31 @@ class LLMFactory:
         # 延迟导入，避免首屏加载 openai（约 2.4s）
         from llm.openai_llm import OpenAICompatibleLLM
 
-        if provider == "openai":
+        def _cloud_base_url(default_url: str) -> str:
+            """云提供商 Base URL：临时参数 > .env 覆盖 > 官方默认。"""
+            if base_url and base_url.strip():
+                return normalize_base_url(base_url)
+            env_base = getattr(settings, f"{provider.upper()}_BASE_URL", "")
+            return normalize_base_url(env_base or default_url)
+
+        if provider == "zhipu":
             llm = OpenAICompatibleLLM(
-                api_key=settings.OPENAI_API_KEY,
-                base_url=settings.OPENAI_BASE_URL or config["base_url"],
-                model=chosen_model,
-                provider=provider,
-            )
-        elif provider == "zhipu":
-            llm = OpenAICompatibleLLM(
-                api_key=settings.ZHIPU_API_KEY,
-                base_url=config["base_url"],
+                api_key=api_key or settings.ZHIPU_API_KEY,
+                base_url=_cloud_base_url(config["base_url"]),
                 model=chosen_model,
                 provider=provider,
             )
         elif provider == "qwen":
             llm = OpenAICompatibleLLM(
-                api_key=settings.DASHSCOPE_API_KEY,
-                base_url=config["base_url"],
+                api_key=api_key or settings.DASHSCOPE_API_KEY,
+                base_url=_cloud_base_url(config["base_url"]),
                 model=chosen_model,
                 provider=provider,
             )
         elif provider == "deepseek":
             llm = OpenAICompatibleLLM(
-                api_key=settings.DEEPSEEK_API_KEY,
-                base_url=config["base_url"],
+                api_key=api_key or settings.DEEPSEEK_API_KEY,
+                base_url=_cloud_base_url(config["base_url"]),
                 model=chosen_model,
                 provider=provider,
             )
@@ -126,7 +137,9 @@ class LLMFactory:
             )
         elif provider == "custom":
             # 自定义 OpenAI 兼容 API：URL/Key/模型名由用户运行时填写
-            base_url = normalize_base_url(settings.CUSTOM_API_BASE_URL)
+            base_url = normalize_base_url(
+                (base_url or "").strip() or settings.CUSTOM_API_BASE_URL
+            )
             if not base_url:
                 raise ValueError(
                     "自定义 API 未配置 Base URL。请在侧边栏选择「自定义 API」后填写。"
@@ -136,7 +149,7 @@ class LLMFactory:
                     "自定义 API 未配置模型名。请在侧边栏「模型」处填写。"
                 )
             llm = OpenAICompatibleLLM(
-                api_key=settings.CUSTOM_API_KEY or "local",
+                api_key=(api_key or "").strip() or settings.CUSTOM_API_KEY or "local",
                 base_url=base_url,
                 model=chosen_model,
                 provider=provider,
@@ -182,12 +195,29 @@ class LLMFactory:
         return available
 
     @staticmethod
-    def get_models(provider: str) -> list[str]:
+    def get_models(provider: str, kind: str = "llm") -> list[str]:
         """获取指定提供商的可用模型列表。
 
+        Args:
+            provider: 提供商名称
+            kind: "llm" 过滤掉 embedding 模型（对话/研究用）；
+                  "embedding" 只返回 embedding 模型（知识库用）
+
         本地动态服务（LM Studio/Ollama）实时查询已安装/已加载模型，
-        查询失败回退静态配置；云端返回静态配置。
+        查询失败回退静态配置；云端返回静态配置。结果去重
+        （LM Studio 可能对同一模型的不同量化版返回重复 ID）。
         """
+        # embedding 模型名关键词：从 LLM 列表过滤掉向量模型，
+        # 避免用户在下拉里把 embedding 模型误当成对话模型保存
+        _EMBED_KW = ("embed", "bge", "e5-", "gte", "minilm", "sentence")
+
+        def _filter(models: list[str]) -> list[str]:
+            if kind == "embedding":
+                picked = [m for m in models if any(k in m.lower() for k in _EMBED_KW)]
+            else:
+                picked = [m for m in models if not any(k in m.lower() for k in _EMBED_KW)]
+            return list(dict.fromkeys(picked))  # 去重且保序
+
         config = get_provider_config(provider)
         is_dynamic = config.get("dynamic_models") or provider == "ollama"
 
@@ -197,23 +227,26 @@ class LLMFactory:
                 llm = LLMFactory.create(provider)
                 remote = llm.list_models()
                 if remote:
-                    return remote
+                    return _filter(remote)
             except Exception as e:
                 logger.debug(f"{provider} 动态模型发现失败: {e}")
             # 回退静态列表（列表可能为空，UI 层会提示手动输入）
             models = config.get("models", [])
-            return models if models else ([config["default_model"]] if config.get("default_model") else [])
+            if models:
+                return _filter(models)
+            return ([config["default_model"]] if config.get("default_model") else [])
 
         models = config.get("models", [])
         if not models and config["default_model"]:
             return [config["default_model"]]
-        return models
+        return _filter(models)
 
     @staticmethod
-    def health_check(provider: str, model: Optional[str] = None) -> dict:
-        """对指定提供商做详细健康检查。"""
+    def health_check(provider: str, model: Optional[str] = None,
+                     api_key: Optional[str] = None, base_url: Optional[str] = None) -> dict:
+        """对指定提供商做详细健康检查（支持临时 Key/URL，供前端测试连接）。"""
         try:
-            llm = LLMFactory.create(provider, model or None)
+            llm = LLMFactory.create(provider, model or None, api_key=api_key, base_url=base_url)
             return llm.health_check()
         except Exception as e:
             return {

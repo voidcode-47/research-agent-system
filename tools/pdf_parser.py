@@ -40,18 +40,16 @@ class PDFParserTool(BaseTool):
             return "PyMuPDF 未安装，请运行 pip install PyMuPDF"
 
         try:
-            doc = fitz.open(path)
-            total_pages = len(doc)
-            pages_to_read = total_pages if max_pages <= 0 else min(max_pages, total_pages)
+            with fitz.open(path) as doc:
+                total_pages = len(doc)
+                pages_to_read = total_pages if max_pages <= 0 else min(max_pages, total_pages)
 
-            pages = []
-            for i in range(pages_to_read):
-                page = doc[i]
-                text = page.get_text("text")
-                if text.strip():
-                    pages.append(f"--- 第 {i+1} 页 ---\n{text.strip()}")
-
-            doc.close()
+                pages = []
+                for i in range(pages_to_read):
+                    page = doc[i]
+                    text = page.get_text("text")
+                    if text.strip():
+                        pages.append(f"--- 第 {i+1} 页 ---\n{text.strip()}")
 
             if not pages:
                 return "PDF 未提取到文本（可能是扫描件）"
@@ -82,15 +80,14 @@ class PDFParserTool(BaseTool):
 
         documents = []
         try:
-            doc = fitz.open(path)
-            for i in range(len(doc)):
-                text = doc[i].get_text("text").strip()
-                if text:
-                    documents.append({
-                        "content": text,
-                        "metadata": {"page": i + 1, "source": path.name},
-                    })
-            doc.close()
+            with fitz.open(path) as doc:
+                for i in range(len(doc)):
+                    text = doc[i].get_text("text").strip()
+                    if text:
+                        documents.append({
+                            "content": text,
+                            "metadata": {"page": i + 1, "source": path.name},
+                        })
         except Exception as e:
             logger.error(f"PDF 解析失败: {e}")
         return documents

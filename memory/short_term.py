@@ -110,8 +110,12 @@ class ShortTermMemory:
         return result
 
     def needs_compression(self) -> bool:
-        """是否需要压缩。"""
-        return count_messages_tokens(self.get_messages()) >= self.max_tokens
+        """是否需要压缩。
+
+        必须按原始消息列表判断：get_messages() 本身已按上限截断，
+        用它计数永远达不到阈值，压缩逻辑会完全失效。
+        """
+        return count_messages_tokens(self.messages) >= self.max_tokens
 
     def compress(self, llm) -> None:
         """用 LLM 压缩旧消息为摘要。"""
@@ -155,8 +159,13 @@ class ShortTermMemory:
 
     @property
     def token_count(self) -> int:
-        """当前 token 数。"""
+        """当前 token 数（窗口截断后的视图）。"""
         return count_messages_tokens(self.get_messages())
+
+    @property
+    def raw_token_count(self) -> int:
+        """原始消息总量（未经窗口截断），用于 token 预算判断。"""
+        return count_messages_tokens(self.messages)
 
     @property
     def summary(self) -> str:

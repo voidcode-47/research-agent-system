@@ -20,6 +20,10 @@ def retry(
         backoff: 退避基数（每次等待 backoff^attempt 秒）
         exceptions: 触发重试的异常类型
     """
+    # max_attempts <= 0 时循环一次都不执行，末尾会 raise None 变成
+    # "TypeError: exceptions must derive from BaseException"，这里直接兜底为 1 次
+    max_attempts = max(1, int(max_attempts))
+
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):

@@ -1,16 +1,6 @@
 """各 LLM 提供商配置表，集中维护模型名/上下文窗口/能力。"""
 
 PROVIDER_CONFIG: dict[str, dict] = {
-    "openai": {
-        "label": "OpenAI",
-        "default_model": "gpt-4o-mini",
-        "models": ["gpt-4o-mini", "gpt-4o", "gpt-3.5-turbo"],
-        "embedding_model": "text-embedding-3-small",
-        "context_window": 128000,
-        "supports_tools": True,
-        "base_url": "https://api.openai.com/v1",
-        "env_key": "OPENAI_API_KEY",
-    },
     "zhipu": {
         "label": "智谱 GLM",
         "default_model": "glm-4-flash",

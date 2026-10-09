@@ -74,11 +74,20 @@ class TestSafetyGuard:
     def test_loop_detection(self):
         from utils.safety import SafetyGuard
         guard = SafetyGuard(max_iterations=10)
-        # 同一个 action 重复
+        # 原样重试一次属于正常行为（工具返回空结果后重试），不应判定为死循环
         guard.is_looping("search", {"q": "test"})
         guard.is_looping("other", {"q": "x"})
-        result = guard.is_looping("search", {"q": "test"})
-        assert result is True
+        assert guard.is_looping("search", {"q": "test"}) is False
+        assert guard.is_looping("search", {"q": "test"}) is False
+        # 连续第三次相同 action 才判定为死循环
+        assert guard.is_looping("search", {"q": "test"}) is True
+
+    def test_is_critical_scales_with_max_iterations(self):
+        from utils.safety import SafetyGuard
+        # 小 max_iterations 下不应在第 1 轮就要求收敛
+        guard = SafetyGuard(max_iterations=4)
+        guard.tick_iteration()
+        assert guard.is_critical is False
 
     def test_over_iterations(self):
         from utils.safety import SafetyGuard

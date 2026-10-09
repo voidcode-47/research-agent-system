@@ -1,10 +1,14 @@
 """学术文献检索工具。
 
-来源策略（均免费、无需 Key、国内网络可用）：
+来源策略（均免费、无需 Key、接口稳定）：
 1. Crossref API —— 国际期刊文献（含部分中文学术期刊），返回标题/作者/年份/
-   期刊/摘要/DOI 链接，接口稳定开放。
-2. 必应学术站点检索 —— 限定 site:cnki.net（知网）/ wanfangdata.com.cn（万方），
-   返回中文论文题录与摘要片段。
+   期刊/摘要/DOI 链接。
+2. OpenAlex API —— 开放学术图谱，用 filter=language:zh 检索中文文献，
+   覆盖（教育研究）（电子通信与计算机科学）等中文学术期刊。
+
+历史说明：中文文献曾用"百度/必应 site:wanfangdata.com.cn"抓取，实测已失效——
+搜索引擎对程序化 site: 查询返回验证码页或无关兜底结果（0 命中），
+且异常被外层静默吞掉，表现为"中文文献"一节直接消失。故改为 OpenAlex。
 
 说明：学术全文受版权与平台权限限制，本工具提供题录+摘要，足以支撑研究性
 问题的文献调研；如需全文可在结果链接处访问（知网/万方部分需机构权限）。
@@ -17,27 +21,60 @@ from utils.retry import retry
 
 logger = get_logger(__name__)
 
-_UA = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
-)
+# 两个元数据接口的礼貌池邮箱（提供后配额更高）
+_MAILTO = "research-assistant@users.noreply.github.com"
+_UA = f"research-assistant/1.0 (mailto:{_MAILTO})"
+_OPENALEX_API = "https://api.openalex.org/works"
 
-_HEADERS = {
-    "User-Agent": _UA,
-    "Accept-Language": "zh-CN,zh;q=0.9",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
+
+def _rebuild_abstract(inverted: dict | None, limit: int = 400) -> str:
+    """还原 OpenAlex 的摘要。
+
+    OpenAlex 用 {词: [出现位置]} 的倒排索引表示摘要，需按位置拼回文本。
+    中文分词后词与词之间本无空格，按空格拼接会插进大量多余空格，
+    故按 CJK 字符占比选择连接符。
+    """
+    if not inverted:
+        return ""
+    positions: dict[int, str] = {}
+    for word, idxs in inverted.items():
+        for i in idxs or []:
+            positions[i] = word
+    if not positions:
+        return ""
+    words = [positions[i] for i in sorted(positions)]
+    joined = "".join(words)
+    cjk = sum(1 for ch in joined if "一" <= ch <= "鿿")
+    text = ("" if cjk > len(joined) * 0.3 else " ").join(words)
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def _format_item(index: int, it: dict) -> str:
+    """统一的条目渲染（两个来源字段结构一致）。"""
+    meta = " | ".join(x for x in [
+        it.get("authors") or "",
+        str(it["year"]) if it.get("year") else "",
+        it.get("journal") or "",
+    ] if x)
+    cited = f"被引 {it['cited_by']} 次" if it.get("cited_by") else "新近论文"
+    oa_mark = " 📄开放全文" if it.get("oa_pdf") else ""
+    return (
+        f"[{index}] {it['title']}{oa_mark}\n"
+        f"    {meta} | {cited}\n"
+        f"    {it.get('abstract') or '（该库未提供摘要）'}\n"
+        f"    {it.get('url') or ''}"
+    )
 
 
 class AcademicSearchTool(BaseTool):
-    """学术文献检索：Crossref 国际期刊 + 必应索引的中文知网/万方论文。"""
+    """学术文献检索：Crossref 国际期刊 + OpenAlex 中文期刊。"""
 
     name = "academic_search"
     description = (
         "学术文献检索（论文），返回论文标题、作者、年份、期刊/来源、摘要与链接。"
-        "中文文献来自万方数据，国际文献来自 Crossref（含中文学术期刊）。"
-        "适合研究性问题的文献调研。优先选择与主题相关的期刊论文，"
-        "书籍、教程类文献优先级低。"
+        "国际文献来自 Crossref，中文文献来自 OpenAlex（language=中文），"
+        "两者均免费、无需 Key。适合研究性问题的文献调研。"
+        "优先选择与主题相关的期刊论文，书籍、教程类文献优先级低。"
     )
     parameters = {
         "type": "object",
@@ -69,10 +106,10 @@ class AcademicSearchTool(BaseTool):
                 "rows": max_results,
                 "select": "title,author,container-title,published,abstract,DOI,URL,"
                           "is-referenced-by-count,link",
-                # Crossref 礼貌池要求：提供联系邮箱以获得更高配额（可替换为真实邮箱）
-                "mailto": "research-assistant@users.noreply.github.com",
+                # Crossref 礼貌池要求：提供联系邮箱以获得更高配额
+                "mailto": _MAILTO,
             },
-            headers={"User-Agent": "research-assistant/1.0 (mailto:research-assistant@users.noreply.github.com)"},
+            headers={"User-Agent": _UA},
             timeout=15,
         )
         r.raise_for_status()
@@ -83,21 +120,23 @@ class AcademicSearchTool(BaseTool):
             title = (it.get("title") or [""])[0].strip()
             if not title:
                 continue
-            authors = it.get("author", [])
+            authors = it.get("author") or []
             parts = []
             for a in authors[:4]:
+                if not isinstance(a, dict):
+                    continue
                 name = f"{a.get('family', '')} {a.get('given', '')}".strip()
                 if name:
                     parts.append(name)
             author_str = ", ".join(parts) + (" 等" if len(authors) > 4 else "")
             year = None
             for k in ("published-print", "published-online", "published", "issued"):
-                dp = it.get(k, {}).get("date-parts")
+                dp = (it.get(k) or {}).get("date-parts")
                 if dp and dp[0]:
                     year = dp[0][0]
                     break
             journal = (it.get("container-title") or [""])[0].strip()
-            abstract = re.sub(r"<[^>]+>", " ", it.get("abstract", ""))
+            abstract = re.sub(r"<[^>]+>", " ", it.get("abstract") or "")
             abstract = re.sub(r"\s+", " ", abstract).strip()[:400]
             doi = it.get("DOI", "")
             # 开放获取 PDF 链接（供入库精读）
@@ -119,93 +158,100 @@ class AcademicSearchTool(BaseTool):
             })
         return out
 
-    def _search_cn_sites(self, query: str, max_results: int) -> list[dict]:
-        """百度搜索限定万方数据站点，返回中文论文题录与摘要。
+    def _search_openalex(self, query: str, max_results: int) -> list[dict]:
+        """OpenAlex API：检索中文文献（filter=language:zh）。
 
-        注：site:cnki.net 在百度会触发安全验证页（知网被特殊处理），
-        故中文文献以万方（wanfangdata.com.cn）为主，知网收录的
-        中文学术期刊大多也可在 Crossref 检索到。
+        免费、无需 Key、返回 JSON。取代原先"搜索引擎 site: 万方"的抓取方案：
+        搜索引擎对程序化 site: 查询会返回验证码页或与查询无关的兜底结果
+        （实测 0 命中），且失败被静默吞掉，无法察觉。
         """
         import requests
-        from lxml import html
 
         r = requests.get(
-            "https://www.baidu.com/s",
-            params={"wd": f"site:wanfangdata.com.cn {query}"},
-            headers=_HEADERS,
-            timeout=12,
+            _OPENALEX_API,
+            params={
+                "search": query,
+                "filter": "language:zh",
+                "per-page": max(1, min(int(max_results), 25)),
+                "select": "doi,title,display_name,publication_year,language,cited_by_count,"
+                          "authorships,primary_location,best_oa_location,"
+                          "abstract_inverted_index",
+                "mailto": _MAILTO,
+            },
+            headers={"User-Agent": _UA},
+            timeout=15,
         )
         r.raise_for_status()
-        tree = html.fromstring(r.text)
-        results = []
-        for h3 in tree.xpath("//h3/a"):
-            title = " ".join(h3.text_content().split())
-            if not title or "广告" in title:
+        results = r.json().get("results", [])
+
+        out = []
+        for w in results:
+            if not isinstance(w, dict):
                 continue
-            href = h3.get("href", "")
-            # 摘要：取最近的结果容器文本
-            node, container = h3, None
-            for _ in range(6):
-                node = node.getparent()
-                if node is None:
-                    break
-                cls = node.get("class", "")
-                if any(k in cls for k in ("cosc-card-content", "c-container", "result")):
-                    container = node
-                    break
-            snippet = ""
-            if container is not None:
-                snippet = " ".join(container.text_content().split())
-                snippet = snippet.replace(title, "", 1).strip()[:300]
-            results.append({"title": title, "abstract": snippet, "url": href})
-            if len(results) >= max_results:
-                break
-        return results
+            title = (w.get("title") or w.get("display_name") or "").strip()
+            if not title:
+                continue
+            authorships = w.get("authorships") or []
+            parts = []
+            for a in authorships[:4]:
+                if not isinstance(a, dict):
+                    continue
+                name = ((a.get("author") or {}).get("display_name") or "").strip()
+                if name:
+                    parts.append(name)
+            author_str = ", ".join(parts) + (" 等" if len(authorships) > 4 else "")
+            source = ((w.get("primary_location") or {}).get("source") or {})
+            doi = (w.get("doi") or "").replace("https://doi.org/", "")
+            oa_pdf = (w.get("best_oa_location") or {}).get("pdf_url") or ""
+            out.append({
+                "title": title,
+                "authors": author_str,
+                "year": w.get("publication_year"),
+                "journal": (source.get("display_name") or "").strip(),
+                "abstract": _rebuild_abstract(w.get("abstract_inverted_index")),
+                "url": w.get("doi") or (w.get("primary_location") or {}).get("landing_page_url") or "",
+                "doi": doi,
+                "cited_by": w.get("cited_by_count") or 0,
+                "oa_pdf": oa_pdf,
+            })
+        return out
 
     @retry(max_attempts=2, backoff=1.5)
     def execute(self, query: str, max_results: int = 5) -> str:
         """执行学术文献检索。"""
         parts = []
+        problems = []
 
-        # 1) Crossref 国际期刊（含被引次数 → 重点论文识别；OA 链接 → 供入库）
-        try:
-            items = self._search_crossref(query, max_results)
-            if items:
-                lines = []
-                for i, it in enumerate(items, 1):
-                    meta = " | ".join(x for x in [
-                        it["authors"], str(it["year"]) if it["year"] else "", it["journal"]
-                    ] if x)
-                    cited = f"被引 {it['cited_by']} 次" if it["cited_by"] else "新近论文"
-                    oa_mark = " 📄开放全文" if it["oa_pdf"] else ""
-                    lines.append(
-                        f"[{i}] {it['title']}{oa_mark}\n"
-                        f"    {meta} | {cited}\n"
-                        f"    {it['abstract'] or '（该库未提供摘要）'}\n"
-                        f"    {it['url']}"
-                    )
-                parts.append("【国际期刊文献 (Crossref)】\n" + "\n\n".join(lines))
-        except Exception as e:
-            logger.warning(f"Crossref 检索失败: {e}")
-
-        # 2) 中文知网/万方（经必应索引）
-        try:
-            items = self._search_cn_sites(query, max_results)
-            if items:
-                lines = []
-                for i, it in enumerate(items, 1):
-                    lines.append(
-                        f"{i}. {it['title']}\n"
-                        f"   {it['abstract'] or '（无摘要）'}\n"
-                        f"   {it['url']}"
-                    )
-                parts.append("【中文文献 (知网/万方)】\n" + "\n\n".join(lines))
-        except Exception as e:
-            logger.warning(f"中文文献检索失败: {e}")
+        # Crossref：国际期刊（含被引次数 → 重点论文识别；OA 链接 → 供入库）
+        # OpenAlex：中文文献（language:zh）
+        sources = (
+            ("【国际期刊文献 (Crossref)】", self._search_crossref),
+            ("【中文文献 (OpenAlex · 中文期刊)】", self._search_openalex),
+        )
+        for label, search in sources:
+            try:
+                items = search(query, max_results)
+            except Exception as e:
+                # 必须把失败显式暴露出来：此前异常被静默吞掉，
+                # 中文文献这条路径实际上一次都没成功过，界面上却看不出任何异常
+                logger.warning(f"{label} 检索失败: {e}")
+                problems.append(f"{label} 失败（{e}）")
+                continue
+            if not items:
+                problems.append(f"{label} 无结果")
+                continue
+            parts.append(
+                label + "\n" + "\n\n".join(_format_item(i, it) for i, it in enumerate(items, 1))
+            )
 
         if not parts:
-            return f"学术文献检索失败（网络或接口异常），请稍后重试或更换关键词。"
-        return f"搜索 '{query}' 的学术文献:\n\n" + "\n\n".join(parts)
+            detail = "；".join(problems) if problems else "接口无返回"
+            return f"学术文献检索失败（{detail}）。请稍后重试或更换关键词。"
+
+        body = "\n\n".join(parts)
+        if problems:
+            body += "\n\n（部分来源未返回结果：" + "；".join(problems) + "）"
+        return f"搜索 '{query}' 的学术文献:\n\n{body}"
 
 
 # 自动注册

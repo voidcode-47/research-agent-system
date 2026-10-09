@@ -79,9 +79,10 @@ def build_research_graph(
     graph.add_edge("summarizer", "quality_check")
 
     # 质量检查：通过则结束，不通过回退到研究员
+    # 路由读节点已算好的结论，避免同一轮重复调用 LLM 复核
     graph.add_conditional_edges(
         "quality_check",
-        supervisor.check_quality,
+        supervisor.route_after_quality,
         {
             "pass": END,
             "fail": "researcher",

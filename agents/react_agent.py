@@ -9,10 +9,9 @@ from typing import Iterator, Optional
 
 from llm.base import BaseLLM
 from memory.manager import MemoryManager
-from tools.base import BaseTool, get_tools_schema, TOOL_REGISTRY
+from tools.base import BaseTool
 from utils.logger import get_logger
 from utils.safety import SafetyGuard
-from utils.retry import retry
 
 logger = get_logger(__name__)
 
@@ -143,9 +142,9 @@ class ReActAgent:
         for _ in range(self.safety.max_iterations):
             self.safety.tick_iteration()
 
-            # 检查 token 预算
+            # 检查 token 预算（按原始记忆计数，截断视图永远达不到阈值）
             messages = self.memory.get_messages(user_input)
-            if self.safety.check_budget(messages):
+            if self.safety.check_budget(self.memory.raw_token_count):
                 yield AgentStep(
                     type=StepType.ERROR,
                     content="达到 token 预算上限，强制终止",
@@ -228,9 +227,13 @@ class ReActAgent:
 
                 # Execute + Observe
                 observation = self._execute_tool(tc.name, tc.arguments)
+                # 观察结果必须带上工具名与参数：研究员据此收集引用来源，
+                # 缺失时报告里的「检索工具记录 / 参考文献」会永远为空。
                 yield AgentStep(
                     type=StepType.OBSERVATION,
                     content=observation,
+                    tool_name=tc.name,
+                    tool_args=tc.arguments,
                 )
 
                 self.memory.add_message({

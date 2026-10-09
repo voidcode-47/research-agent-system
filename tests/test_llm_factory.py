@@ -22,13 +22,13 @@ class TestLLMBase:
 
 
 class TestLLMFactory:
-    def test_create_openai(self):
+    def test_create_deepseek(self):
         with patch("config.settings.settings") as mock_s:
-            mock_s.OPENAI_API_KEY = "sk-test"
-            mock_s.OPENAI_BASE_URL = "https://api.openai.com/v1"
-            llm = LLMFactory.create("openai")
-            assert llm.provider == "openai"
-            assert llm.model == "gpt-4o-mini"
+            mock_s.DEEPSEEK_API_KEY = "sk-test"
+            mock_s.DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+            llm = LLMFactory.create("deepseek")
+            assert llm.provider == "deepseek"
+            assert llm.model == "deepseek-chat"
 
     def test_create_zhipu(self):
         with patch("config.settings.settings") as mock_s:
@@ -67,8 +67,8 @@ class TestLLMFactory:
             LLMFactory.create("unknown_provider")
 
     def test_get_models(self):
-        models = LLMFactory.get_models("openai")
-        assert "gpt-4o-mini" in models
+        models = LLMFactory.get_models("zhipu")
+        assert "glm-4-flash" in models
 
 
 class TestHealthCheck:
@@ -148,8 +148,8 @@ class TestHealthCheck:
 
 class TestProviderConfig:
     def test_get_provider_config(self):
-        config = get_provider_config("openai")
-        assert config["label"] == "OpenAI"
+        config = get_provider_config("zhipu")
+        assert config["label"] == "智谱 GLM"
         assert config["supports_tools"] is True
 
     def test_get_unknown_raises(self):

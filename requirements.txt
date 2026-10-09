@@ -5,6 +5,7 @@ ollama>=0.1.7
 # === Agent 框架 ===
 langgraph>=0.2.0
 langchain-core>=0.2.0
+typing-extensions>=4.8.0   # StateGraph 的 TypedDict 定义直接依赖
 
 # === RAG ===
 chromadb>=0.5.0
@@ -16,6 +17,12 @@ trafilatura>=1.8.0
 
 # === 搜索 ===
 duckduckgo-search>=6.0.0
+
+# === 网页抓取 / HTML 解析 ===
+# 学术检索（Crossref/Unpaywall/百度）与中文搜索解析直接 import，必须显式声明，
+# 不能只依赖 trafilatura 的传递依赖
+requests>=2.31.0
+lxml>=5.0.0
 
 # === UI / Web 服务 ===
 fastapi>=0.110.0

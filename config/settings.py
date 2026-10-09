@@ -12,22 +12,21 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM 默认提供商
-    DEFAULT_LLM_PROVIDER: str = "openai"
-    DEFAULT_EMBEDDING_PROVIDER: str = "openai"
-
-    # OpenAI
-    OPENAI_API_KEY: str = ""
-    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    # LLM 默认提供商（云端默认 DeepSeek；本地可选 ollama/lmstudio）
+    DEFAULT_LLM_PROVIDER: str = "deepseek"
+    DEFAULT_EMBEDDING_PROVIDER: str = "zhipu"
 
     # 智谱 GLM
     ZHIPU_API_KEY: str = ""
+    ZHIPU_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
 
     # 通义千问 (DashScope)
     DASHSCOPE_API_KEY: str = ""
+    DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
     # DeepSeek
     DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
 
     # 自定义 OpenAI 兼容 API（由用户在侧边栏/设置页填写，可连接任意兼容网关）
     CUSTOM_API_BASE_URL: str = ""

@@ -98,8 +98,13 @@ class TextSplitter:
 
             if len(current) + len(piece) > self.chunk_size and current:
                 chunks.append(current.strip())
-                # 保留重叠
-                overlap_text = current[-self.chunk_overlap:] if self.chunk_overlap > 0 else ""
+                # 保留重叠。硬切分（separator 为空）时块长已等于 chunk_size，
+                # 再加重叠会让每块超出上限，触发小模型输入超限，故跳过。
+                overlap_text = (
+                    current[-self.chunk_overlap:]
+                    if self.chunk_overlap > 0 and separator
+                    else ""
+                )
                 current = overlap_text + piece
             else:
                 current += piece

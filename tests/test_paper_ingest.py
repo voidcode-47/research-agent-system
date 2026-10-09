@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from tools.paper_ingest import PaperIngestTool
 
 
@@ -52,6 +54,57 @@ class TestPaperIngest:
              patch.object(t, "_download_pdf", return_value=False):
             out = t.execute("10.1000/xyz")
         assert "超过 30MB 限制" in out
+
+    def test_oversize_download_removes_partial_file(self, tmp_path, monkeypatch):
+        """超限下载必须删掉残缺文件，否则会被后续解析当成有效 PDF。"""
+        import tools.paper_ingest as pi
+        monkeypatch.setattr(pi, "_MAX_PDF_BYTES", 1024)
+
+        t = PaperIngestTool(_vs_mock())
+        dest = tmp_path / "a.pdf"
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, chunk_size=0):
+                yield b"x" * 4096
+
+        with patch("requests.get", return_value=FakeResp()):
+            assert t._download_pdf("https://pdf.example/a.pdf", dest) is False
+
+        assert not dest.exists()
+
+    def test_download_write_error_removes_partial_file(self, tmp_path):
+        import tools.paper_ingest as pi
+        t = PaperIngestTool(_vs_mock())
+        dest = tmp_path / "b.pdf"
+
+        class FakeResp:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def raise_for_status(self):
+                pass
+
+            def iter_content(self, chunk_size=0):
+                yield b"y" * 64
+                raise RuntimeError("连接中断")
+
+        with patch("requests.get", return_value=FakeResp()):
+            with pytest.raises(RuntimeError):
+                t._download_pdf("https://pdf.example/b.pdf", dest)
+
+        assert not dest.exists()
 
     def test_full_ingest_flow(self, tmp_path):
         vs = _vs_mock()

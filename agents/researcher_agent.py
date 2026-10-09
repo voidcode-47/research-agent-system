@@ -12,6 +12,7 @@ from tools.base import BaseTool
 from utils.safety import SafetyGuard
 from config.prompts import RESEARCHER_SYSTEM_PROMPT
 from utils.logger import get_logger
+from utils.report_refs import build_reference_list
 
 logger = get_logger(__name__)
 
@@ -69,11 +70,29 @@ class ResearcherAgent:
                     conflicts.append(step.content)
 
             logger.info(f"[研究员] 完成，收集 {len(research_data)} 条信息")
+
+            # 统一编号的可引用文献清单（供总结员作为唯一引用池，避免编号冲突/编造）
+            ref_list = build_reference_list(research_data)
+            if ref_list:
+                logger.info(f"[研究员] 生成可引用文献清单 {len(ref_list.splitlines())} 条")
+
+            # 一条资料都没收集到 = 本轮研究实际失败。
+            # 若仍返回 research_done，后续分析员/总结员会基于空资料继续，
+            # 最终产出一份无来源的"报告"并被当作有效结果。
+            failed = not research_data
+            error = ""
+            if failed:
+                error = "；".join(conflicts) if conflicts else "未收集到任何资料"
+                logger.warning(f"[研究员] 研究未产出资料: {error}")
+
             return {
                 "research_data": research_data,
+                "ref_list": ref_list,
                 "sources": sources,
                 "conflicts": conflicts,
-                "status": "research_done",
+                "research_failed": failed,
+                "error": error,
+                "status": "research_failed" if failed else "research_done",
                 "current_agent": "analyst",
             }
 

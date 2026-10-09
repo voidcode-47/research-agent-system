@@ -22,6 +22,11 @@ class MemoryManager:
         self.short = short_term
         self.long = long_term
 
+    @property
+    def raw_token_count(self) -> int:
+        """短期记忆的原始 token 总量（未经窗口截断）。"""
+        return self.short.raw_token_count
+
     def add(self, role: str, content: str) -> None:
         """添加简单消息到短期记忆。"""
         self.short.add(role, content)
@@ -47,7 +52,12 @@ class MemoryManager:
 
         # 如果有长期记忆且提供了查询，补充上下文
         if self.long and query:
-            memories = self.long.recall(query, k=3)
+            try:
+                memories = self.long.recall(query, k=3)
+            except Exception as e:
+                # 长期记忆依赖向量库/embedding，不可用时不应中断整轮对话
+                logger.warning(f"长期记忆召回失败，跳过: {e}")
+                memories = []
             if memories:
                 context = "相关历史记忆:\n" + "\n---\n".join(memories)
                 # 插入到所有 system 消息之后、第一条对话消息之前

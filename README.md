@@ -2,7 +2,7 @@
 
 一个能自动检索学术资料、分析论文、生成本地知识库、并支持多轮问答的研究助手。
 
-采用**三层递进架构**：**ReAct 核心闭环 → RAG 增强 → 多智能体协作**，支持 OpenAI / 智谱 GLM / 通义千问 / DeepSeek / Ollama / LM Studio 六种 LLM 提供商，云端与本地（免费）均可使用。
+采用**三层递进架构**：**ReAct 核心闭环 → RAG 增强 → 多智能体协作**，支持智谱 GLM / 通义千问 / DeepSeek / 自定义 API / Ollama / LM Studio 六种 LLM 提供商，云端与本地（免费）均可使用。
 
 ```
                  ┌─────────────────────────────────────────────────┐
@@ -26,11 +26,11 @@
 
 ## 功能特性
 
-- **多 LLM 支持**：OpenAI / 智谱 GLM / 通义千问 / DeepSeek / **自定义 API（OpenAI 兼容，可连任意中转/自建网关）** / Ollama / LM Studio，云端 Key 与本地模型自由切换；模型名支持**自定义输入**（预设列表之外可手填任意模型名），Ollama/LM Studio 自动发现本地已安装/已加载模型
+- **多 LLM 支持**：智谱 GLM / 通义千问 / DeepSeek / **自定义 API（OpenAI 兼容，可连任意中转/自建网关）** / Ollama / LM Studio，云端与本地模型自由切换；**所有云端 API Key 与 Base URL 均在网页「模型配置」中填写保存**（不预存在项目文件，测试连接支持"先填后测、未保存即可测"）；模型名支持**自定义输入**（预设列表之外可手填任意模型名），Ollama/LM Studio 自动发现本地已安装/已加载模型
 - **第一层 · ReAct 核心闭环**：工具调用 + 短期（滑动窗口 + LLM 摘要压缩）/长期记忆 + 防死循环 + Token 预算控制
 - **第二层 · RAG 增强**：PDF/TXT/Markdown/HTML/URL → 文档切分 → ChromaDB 向量检索 → 知识库问答（支持多集合管理）
 - **第三层 · 多智能体协作**：Supervisor 路由 → 研究员收集 → 分析员综合 → 总结员成稿 → 质量检查回退，LangGraph 编排
-- **工具系统**：国内搜索（百度优先、必应兜底，无需 Key）、**学术文献检索（Crossref 国际期刊 + 万方中文论文）**、DuckDuckGo 搜索（可选）、网页抓取、PDF 解析、知识库检索（注册表模式，可扩展）；LLM 限流（429）自动识别并给出友好提示
+- **工具系统**：国内搜索（百度优先、必应兜底，无需 Key）、**学术文献检索（Crossref 国际期刊 + OpenAlex 中文论文）**、DuckDuckGo 搜索（可选）、网页抓取、PDF 解析、知识库检索（注册表模式，可扩展）；LLM 限流（429）自动识别并给出友好提示
 - **Web UI（v2.0 原生 SPA）**：FastAPI + 纯 HTML/JS 单页应用，页面切换零重载（彻底解决切换卡顿）；玻璃拟态风格，侧边栏导航（对话 / 知识库 / 研究 / 设置四页），Agent 思考过程实时追踪（工具调用/观察记录），历史报告网页端直接下载/删除
 - **记忆与安全**：Token 预算强制终止、重复 Action 循环检测、幻觉粗筛、健康检查三级状态
 
@@ -51,11 +51,9 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# 编辑 .env，填入至少一个 LLM 提供商的 API Key
 ```
 
-> 云端提供商任选其一即可（OpenAI / 智谱 / 通义 / DeepSeek）。
-> 想完全免费使用？直接使用本地 Ollama，见下方「使用本地 Ollama（免费）」。
+> **云端 Key 不需要（也不建议）写在 .env 里**：启动后打开网页，在左侧「模型配置」中选择提供商，填写 API Key 与 Base URL 后点「保存」即可，Key 会自动写入本地 .env。想完全免费使用？直接使用本地 Ollama，见下方「使用本地 Ollama（免费）」。
 
 ### 3. 启动应用
 
@@ -65,9 +63,10 @@ python server.py        # 或双击 start.bat 一键启动
 
 访问 http://localhost:8501（启动后浏览器自动打开）
 
-首次打开请在左侧侧边栏选择 LLM 提供商与模型，点击「🔗 测试连接」确认就绪后即可对话。
+首次打开请在左侧侧边栏选择 LLM 提供商，填写 API Key（云端）后点击「🔗 测试连接」确认就绪，再点「保存」即可对话。
 
-> **模型名选不到？** 模型下拉框已内置「✏️ 自定义模型名…」选项——选它后可直接输入任意模型名（如 `gpt-4o`、`glm-4.5`、`qwen2.5:32b`、自建网关上的模型 ID）。预设列表只是常用推荐，不影响使用列表外的模型；Ollama/LM Studio 会自动列出本地已安装/已加载的模型。
+> **模型名选不到？** 模型下拉框支持手动输入——预设列表只是常用推荐，不影响使用列表外的模型（如自建网关上的模型 ID）；Ollama/LM Studio 会自动列出本地已安装/已加载的模型。
+> **测试连接填了 Key 没保存也能测**：前端会把刚填写的 Key/URL 临时传给后端做连通测试，无需先保存。
 
 ### 4. 使用本地 Ollama（可选，免费）
 
@@ -84,23 +83,22 @@ python server.py        # 或双击 start.bat 一键启动
 
 ## 配置说明
 
-所有配置通过项目根目录 `.env` 文件加载（复制自 `.env.example`），已填写的 Key 才会在界面中启用对应提供商。
+所有配置通过项目根目录 `.env` 文件加载（复制自 `.env.example`），已填写的 Key 才会在界面中启用对应提供商。**云端 Key 推荐直接在网页「模型配置」中填写保存，会自动写入 .env。**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `DEFAULT_LLM_PROVIDER` | `openai` | 默认 LLM 提供商 |
-| `DEFAULT_EMBEDDING_PROVIDER` | `openai` | 默认 embedding 提供商 |
-| `OPENAI_API_KEY` / `OPENAI_BASE_URL` | — | OpenAI（可指向任意兼容端点） |
-| `ZHIPU_API_KEY` | — | 智谱 GLM |
-| `DASHSCOPE_API_KEY` | — | 通义千问（DashScope 兼容模式） |
-| `DEEPSEEK_API_KEY` | — | DeepSeek |
+| `DEFAULT_LLM_PROVIDER` | `deepseek` | 默认 LLM 提供商 |
+| `DEFAULT_EMBEDDING_PROVIDER` | `zhipu` | 默认 embedding 提供商 |
+| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` | 官方地址 | DeepSeek（网页模型配置中填写 Key） |
+| `ZHIPU_API_KEY` / `ZHIPU_BASE_URL` | 官方地址 | 智谱 GLM（网页模型配置中填写 Key） |
+| `DASHSCOPE_API_KEY` / `DASHSCOPE_BASE_URL` | 官方地址 | 通义千问（网页模型配置中填写 Key） |
 | `CUSTOM_API_BASE_URL` / `CUSTOM_API_KEY` / `CUSTOM_API_MODEL` | 空 | 自定义 OpenAI 兼容 API（任意中转/自建网关），Base URL 自动补全 `/v1`；也可在侧边栏选择「自定义 API」直接填写，即时生效 |
 | `OLLAMA_BASE_URL` / `OLLAMA_MODEL` | `http://localhost:11434` / `qwen2.5:7b` | Ollama 本地对话模型 |
 | `OLLAMA_EMBEDDING_MODEL` | 留空用 `nomic-embed-text` | Ollama embedding 模型 |
 | `LMSTUDIO_BASE_URL` / `LMSTUDIO_MODEL` | `http://localhost:1234` | LM Studio 本地服务 |
 | `LMSTUDIO_EMBEDDING_MODEL` | 留空自动识别 | LM Studio embedding 模型（含 embed/bge/e5 等关键词自动发现） |
-| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `500` / `50` | RAG 文档切分参数 |
-| `TOP_K` | `5` | 向量检索返回条数 |
+| `CHUNK_SIZE` / `CHUNK_OVERLAP` | `800` / `100` | RAG 文档切分参数 |
+| `TOP_K` | `8` | 向量检索返回条数 |
 | `MAX_REACT_ITERATIONS` | `10` | 单轮 ReAct 最大迭代次数（调小可加快响应，见性能优化） |
 | `MAX_TOKEN_BUDGET` | `8000` | 上下文 Token 预算，超限强制终止 |
 | `CHROMA_PERSIST_DIR` | `./data/chroma_db` | ChromaDB 持久化目录 |
@@ -108,7 +106,7 @@ python server.py        # 或双击 start.bat 一键启动
 
 ### Embedding 回退链
 
-对话 LLM 与 embedding 独立配置。DeepSeek 无 embedding 服务，知识库检索会按以下回退链自动选择可用的 embedding 提供商：**LM Studio → Ollama → OpenAI → 智谱**（本地免费优先，云端需已配置 Key）。
+对话 LLM 与 embedding 独立配置。DeepSeek 无 embedding 服务，知识库检索会按以下回退链自动选择可用的 embedding 提供商：**LM Studio → Ollama → 智谱 → 通义**（本地免费优先，云端需已配置 Key）。
 
 **中文资料建议使用中文/多语言 embedding 模型**（英文为主的模型对中文论文向量化质量一般）：
 - Ollama：`ollama pull bge-m3`，然后 `.env` 设置 `OLLAMA_EMBEDDING_MODEL=bge-m3`
@@ -143,7 +141,7 @@ python server.py        # 或双击 start.bat 一键启动
 ├── tools/                  # 工具系统（注册表模式）
 │   ├── base.py             #   工具基类 + TOOL_REGISTRY
 │   ├── web_search_cn.py    #   国内搜索（百度优先，必应 RSS 兜底）
-│   ├── academic_search.py  #   学术文献检索（Crossref 被引 + 万方）
+│   ├── academic_search.py  #   学术文献检索（Crossref 被引 + OpenAlex 中文）
 │   ├── paper_ingest.py     #   论文入库（Unpaywall OA → PDF → ChromaDB）
 │   ├── search_tool.py      #   DuckDuckGo 搜索（可选，国外网络可用）
 │   ├── web_scraper.py      #   网页正文抓取（requests + trafilatura）
@@ -239,11 +237,11 @@ Supervisor（路由）
 | 环节 | 实现 | 借鉴来源 |
 |------|------|----------|
 | 检索计划先行 | 研究开始前 LLM 生成子主题/关键词/时间范围，按计划组织多路检索 | SPAR Query 理解、Paper-Agent SearchAgent |
-| 多源学术检索 | `academic_search`：Crossref（国际期刊+中文期刊，含**被引次数**识别重点论文）+ 万方（中文） | Paper-Agent 三源检索 |
+| 多源学术检索 | `academic_search`：Crossref（国际期刊+中文期刊，含**被引次数**识别重点论文）+ OpenAlex（中文） | Paper-Agent 两源检索 |
 | 文献入库精读 | `paper_ingest`：DOI → Unpaywall 发现 OA 全文 → 下载 PDF → 解析 → 存入 ChromaDB「papers」集合，可全文问答 | Paper-Agent 渐进式阅读 |
 | 报告引用标注 | 报告正文每处关键论断标注 [n]，文末参考文献列表（标题/链接/DOI） | PaperQA2 in-text citations、STORM |
 
-> 说明：OpenAlex / Semantic Scholar / DBLP / arXiv 等学术 API 在国内网络下不稳定（实测被限流或连接重置），故采用国内实测可用的 Crossref + Unpaywall + 万方组合，均免费、无需 Key。
+> 说明：中文文献的检索源经历过一次迁移——早期用「搜索引擎 `site:wanfangdata.com.cn`」抓取万方，实测会被百度安全验证页拦截、返回 0 命中；改用 OpenAlex（`filter=language:zh`）后实测稳定（6 次查询全部成功、单次约 1.2s）。Semantic Scholar 等接口不带 Key 会被限流（429），故未采用。
 
 ## 性能优化（网页卡顿排查与提升）
 
@@ -401,7 +399,7 @@ pytest tests/ -v
 | 修改 `.env` 后不生效 | pydantic-settings 启动时读取一次 | 重启应用；设置页保存后同样需要重启 |
 | 知识库检索无结果 | 未上传文档 / embedding 未配置 / 相似度低于阈值 | 先上传文档，检查「测试检索」返回；`TOP_K` 与阈值相关参数在 `.env` |
 | 搜索工具报错 / 无结果 | 国内网络无法访问 DuckDuckGo；目标网站反爬或不可达 | 系统默认使用 `web_search_cn`（百度优先、必应兜底）与 `academic_search`（学术文献），无需 Key；对话页「⚙️ 工具配置」勾选即可。抓取失败提示说明原因，可换搜索到的其他来源 |
-| 如何检索学术文献 / 论文 | 需要研究性问题的文献支撑 | 研究页与对话页默认启用 `academic_search`：国际期刊走 Crossref（含收录的中文学术期刊、被引次数），中文论文走万方。返回标题/作者/年份/期刊/摘要/DOI。带 📄开放全文 标记的论文可用 `paper_ingest` 下载全文入库，之后到「知识库」选择 papers 集合全文问答。知网因反爬与付费墙无法直连，其收录内容可通过上述来源获取 |
+| 如何检索学术文献 / 论文 | 需要研究性问题的文献支撑 | 研究页与对话页默认启用 `academic_search`：国际期刊走 Crossref（含收录的中文学术期刊、被引次数），中文论文走 OpenAlex（`language:zh`）。返回标题/作者/年份/期刊/摘要/DOI。带 📄开放全文 标记的论文可用 `paper_ingest` 下载全文入库，之后到「知识库」选择 papers 集合全文问答。知网因反爬与付费墙无法直连，其收录内容可通过上述来源获取 |
 | 论文入库失败（无法下载） | 论文非开放获取（付费墙）或下载源反爬 | `paper_ingest` 仅支持开放获取全文（Unpaywall 发现）。付费论文可在 doi.org 查看题录，或换其他 OA 论文 |
 | 提示「API 限流（请求过于频繁）」/ 429 | 提供商分钟级请求限制（如智谱免费模型 RPM） | 已内置友好提示与退避，不再无效重试；稍等 1~2 分钟，或在侧边栏换模型/提供商（如 glm-4-air、DeepSeek、自定义 API） |
 
@@ -409,11 +407,11 @@ pytest tests/ -v
 
 | 模块 | 技术 |
 |------|------|
-| LLM 接入 | openai（兼容协议复用，覆盖 6 家提供商） |
+| LLM 接入 | OpenAI 兼容协议统一实现（智谱/通义/DeepSeek/自定义/Ollama/LM Studio 六家） |
 | Agent 框架 | langgraph |
 | 向量数据库 | chromadb（本地持久化） |
 | 文档解析 | PyMuPDF, trafilatura |
-| 搜索 | web_search_cn（百度/必应，国内可用）、academic_search（Crossref/万方）、duckduckgo-search（可选） |
+| 搜索 | web_search_cn（百度/必应，国内可用）、academic_search（Crossref/OpenAlex）、duckduckgo-search（可选） |
 | Web 服务 | fastapi + uvicorn（v2.0 主入口） |
 | 配置 | pydantic-settings |
 
