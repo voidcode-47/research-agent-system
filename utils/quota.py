@@ -69,8 +69,10 @@ def _used(data: dict, day: str, key: str) -> int:
         return 0
 
 
-def check(key: str = "local") -> int:
+def check(key: str = "local", unlimited: bool = False) -> int:
     """检查当日剩余额度，超限抛 QuotaExceeded；返回已用次数。"""
+    if unlimited:
+        return 0
     today = _today()
     with _lock:
         data = _load()
@@ -82,8 +84,10 @@ def check(key: str = "local") -> int:
     return used
 
 
-def consume(key: str = "local", amount: int = 1) -> int:
-    """消耗配额；返回消耗后的当日已用次数。"""
+def consume(key: str = "local", amount: int = 1, unlimited: bool = False) -> int:
+    """消耗配额；返回消耗后的当日已用次数。管理员不限额度时不计数。"""
+    if unlimited:
+        return 0
     today = _today()
     with _lock:
         data = _prune(_load(), today)
@@ -108,11 +112,21 @@ def refund(key: str = "local", amount: int = 1) -> int:
         return data[today][key]
 
 
-def usage_snapshot(key: str = "local") -> dict:
+def usage_snapshot(key: str = "local", unlimited: bool = False) -> dict:
     """配额快照：当日用量、剩余量以及最近 7 天历史。"""
     today = _today()
     data = _load()
     used = _used(data, today, key)
+    if unlimited:
+        return {
+            "date": today,
+            "key": key,
+            "limit": None,
+            "used": used,
+            "remaining": None,
+            "unlimited": True,
+            "history": [],
+        }
     limit = settings.DAILY_QUOTA
     history = [
         {"date": day, "used": _used(data, day, key)}
@@ -124,5 +138,6 @@ def usage_snapshot(key: str = "local") -> dict:
         "limit": limit,
         "used": used,
         "remaining": max(0, limit - used),
+        "unlimited": False,
         "history": history,
     }

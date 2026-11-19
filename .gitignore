@@ -40,20 +40,14 @@ ENV/
 .coverage
 htmlcov/
 
-# Generated reports (runtime artifacts; dir auto-created on startup)
-data/reports/
-
-# Data
-data/chroma_db/*
-data/uploads/*
-data/cache/*
+# Runtime data (user papers, generated reports, local prefs)
 data/papers/
+data/reports/
 data/quota.json
 data/ui_prefs.json
-data/kb_names.json
-!data/chroma_db/.gitkeep
-!data/uploads/.gitkeep
-!data/cache/.gitkeep
+data/admin.json
+data/admin_credentials.txt
+data/admin_sessions.json
 
 # Logs
 *.log

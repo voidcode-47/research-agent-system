@@ -195,27 +195,18 @@ class LLMFactory:
         return available
 
     @staticmethod
-    def get_models(provider: str, kind: str = "llm") -> list[str]:
-        """获取指定提供商的可用模型列表。
-
-        Args:
-            provider: 提供商名称
-            kind: "llm" 过滤掉 embedding 模型（对话/研究用）；
-                  "embedding" 只返回 embedding 模型（知识库用）
+    def get_models(provider: str) -> list[str]:
+        """获取指定提供商的可用对话模型列表。
 
         本地动态服务（LM Studio/Ollama）实时查询已安装/已加载模型，
         查询失败回退静态配置；云端返回静态配置。结果去重
-        （LM Studio 可能对同一模型的不同量化版返回重复 ID）。
+        （LM Studio 可能对同一模型的不同量化版返回重复 ID），
+        并过滤掉向量模型，避免用户误把 embedding 模型当成对话模型。
         """
-        # embedding 模型名关键词：从 LLM 列表过滤掉向量模型，
-        # 避免用户在下拉里把 embedding 模型误当成对话模型保存
         _EMBED_KW = ("embed", "bge", "e5-", "gte", "minilm", "sentence")
 
         def _filter(models: list[str]) -> list[str]:
-            if kind == "embedding":
-                picked = [m for m in models if any(k in m.lower() for k in _EMBED_KW)]
-            else:
-                picked = [m for m in models if not any(k in m.lower() for k in _EMBED_KW)]
+            picked = [m for m in models if not any(k in m.lower() for k in _EMBED_KW)]
             return list(dict.fromkeys(picked))  # 去重且保序
 
         config = get_provider_config(provider)

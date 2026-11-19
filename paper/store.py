@@ -142,7 +142,13 @@ def load_analysis(paper_id: str, dimension: str) -> dict | None:
     if dimension not in _ANALYSIS_DIMS:
         return None
     data = _read_json(os.path.join(paper_dir(paper_id), "analysis", f"{dimension}.json"))
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    # 旧版 deai 结果缺少 AI 生成率且分数方向相反（越高越像 AI），视为过期，需重新诊断
+    if dimension == "deai" and "ai_rate" not in data and not data.get("stale"):
+        data = dict(data)
+        data["stale"] = True
+    return data
 
 
 def has_analysis(paper_id: str, dimension: str) -> bool:
@@ -185,6 +191,15 @@ def save_similar(paper_id: str, data: dict) -> None:
 
 def load_similar(paper_id: str) -> dict | None:
     data = _read_json(os.path.join(paper_dir(paper_id), "similar.json"))
+    return data if isinstance(data, dict) else None
+
+
+def save_rewrite_guide(paper_id: str, data: dict) -> None:
+    _write_json(os.path.join(paper_dir(paper_id), "rewrite_guide.json"), data)
+
+
+def load_rewrite_guide(paper_id: str) -> dict | None:
+    data = _read_json(os.path.join(paper_dir(paper_id), "rewrite_guide.json"))
     return data if isinstance(data, dict) else None
 
 

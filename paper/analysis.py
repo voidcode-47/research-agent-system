@@ -1,4 +1,4 @@
-"""四维诊断：层次 / 内容可实现性 / 正文格式 / 去 AI 味。"""
+"""四维诊断：层次 / 内容可实现性 / 正文格式 / 去 AI 味（含 AI 生成率）。"""
 import datetime
 import json
 
@@ -11,13 +11,59 @@ from config.prompts import (
 )
 from llm.gateway import LLMGateway
 from paper import store
-from rules.deai_detector import detect
+from rules.deai_detector import detect, estimate_ai_rate
 from rules.format_rules import check_format
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 _SEVERITIES = ("high", "medium", "low")
+
+_DEAI_LANG_LABELS = {"zh": "中文", "en": "英文", "mixed": "中英混合"}
+_DEAI_LANG_RULES = {
+    "zh": (
+        "中文改写优先级：把理论/框架名从段首移到段中；删除段末总结与套话；"
+        "打破三元并列和排比；替换 AI 高频词；补充具体信息、数据或研究者判断。"
+    ),
+    "en": (
+        "英文改写优先级：删除意义夸大、空泛强化词与公式化开头；把结论与数字、"
+        "图表或引用绑定；拆分从句堆叠的长句；删除破折号；保留校准后的 hedging、"
+        "被动语态和 we 的学术用法。"
+    ),
+    "mixed": (
+        "按句子实际语言应用对应规则：中文句子遵循中文学术去 AI 味规则，"
+        "英文句子遵循英文学术写作规范；不得把一种语言改写成另一种语言。"
+    ),
+}
+_DEAI_PARA_TIPS = {
+    "zh": (
+        "按命中特征改写：把理论/结论移到段中，删除段末总结与套话，"
+        "打破并列对称，补充具体数据或研究判断。"
+    ),
+    "en": (
+        "Address the flagged tells: tie claims to numbers or citations, remove "
+        "hype and empty intensifiers, split long sentences, and replace em dashes."
+    ),
+    "mixed": (
+        "按句子语言分别改写：中文句删套话并补充具体信息，英文句补齐证据指向、"
+        "拆分长句并删除空泛强化词。"
+    ),
+}
+_DEAI_CONSTRAINT_TIPS = {
+    "zh": (
+        "按硬约束改写：有具体来源才保留归因；结尾改为可检验推论或具体后续方向；"
+        "AI 高频词每段不超过 2 个。"
+    ),
+    "en": (
+        "按硬约束改写：删除无出处归因与过度声称；连接词不要连续开头；"
+        "删除破折号；拆分从句堆叠的长句。"
+    ),
+    "mixed": "按中英文各自的硬约束逐项修复：归因、声称强度、连接词、破折号与长句。",
+}
+
+
+class DiagnosisCancelled(Exception):
+    """用户取消诊断（维度之间检查，已完成维度保留）。"""
 
 
 def _now() -> str:
@@ -224,21 +270,102 @@ def _locate_sentence(parsed: dict, sentence: str) -> tuple[int, str]:
 
 def _diagnose_deai(gateway: LLMGateway, parsed: dict, requirement: dict,
                    paper_id: str) -> dict:
-    body_text = "\n".join(
-        p.get("text") or ""
-        for p in parsed.get("paragraphs") or []
-        if p.get("type") == "body"
-    )
+    """AI 痕迹诊断：中英文模板化特征 + AI 生成率 + 段落风险 + 改写建议。
+
+    对用户的分数口径为“去 AI 味得分”= 100 − AI 味指数（越高越好）。
+    """
+    body_items = [
+        p for p in parsed.get("paragraphs") or [] if p.get("type") == "body"
+    ]
+    body_text = "\n".join(p.get("text") or "" for p in body_items)
     det = detect(body_text)
+    est = estimate_ai_rate(body_text)
+    lang = det.get("language") or "zh"
+    lang_label = _DEAI_LANG_LABELS.get(lang, "中文")
+    ai_rate = int(est.get("ai_rate") or 0)
+    ai_score = int(det.get("score", 0))
     top = sorted(det.get("sentences") or [], key=lambda x: x.get("score", 0), reverse=True)[:5]
+    features = det.get("features") or {}
+
+    if ai_rate < 30:
+        rate_desc = f"AI 生成率约 {ai_rate}%（规则估算），AI 痕迹较弱。"
+    elif ai_rate < 60:
+        rate_desc = f"AI 生成率约 {ai_rate}%（规则估算），部分段落存在模板化特征。"
+    else:
+        rate_desc = f"AI 生成率约 {ai_rate}%（规则估算），模板化特征密集。"
+
+    pattern_counts: dict[str, int] = {}
+    for label, count in (det.get("pattern_counts") or {}).items():
+        base = str(label).split("：", 1)[0]
+        pattern_counts[base] = pattern_counts.get(base, 0) + int(count)
+    patterns = [
+        {"label": label, "count": count}
+        for label, count in sorted(
+            pattern_counts.items(), key=lambda kv: (-kv[1], kv[0])
+        )[:6]
+    ]
+    paragraphs = det.get("paragraphs") or []
+    constraints = det.get("constraints") or []
+
+    issues: list[dict] = []
+    risky = sorted(
+        (p for p in paragraphs if p.get("risk") in ("high", "medium")),
+        key=lambda p: (p.get("risk") != "high", -int(p.get("risk_points") or 0)),
+    )[:2]
+    for para in risky:
+        idx = int(para.get("index") or 0)
+        target = body_items[idx] if 0 <= idx < len(body_items) else None
+        if target is None:
+            page, pid = _locate_sentence(parsed, str(para.get("excerpt") or ""))
+        else:
+            page, pid = int(target.get("page") or 0), str(target.get("id") or "")
+        hits = [str(x) for x in (para.get("hits") or []) if str(x).strip()]
+        issues.append({
+            "issue": "段落模板化风险高" if para.get("risk") == "high" else "段落存在模板化表达",
+            "severity": "high" if para.get("risk") == "high" else "medium",
+            "evidence": str(para.get("excerpt") or "")[:120],
+            "suggestion": _DEAI_PARA_TIPS.get(lang, _DEAI_PARA_TIPS["zh"]),
+            "basis": "；".join(hits[:5]) or "段落级规则特征",
+            "page": page,
+            "paragraph_id": pid,
+        })
+
+    unresolved = [
+        c for c in constraints
+        if not any(str(c.get("label") or "") in (it.get("basis") or "") for it in issues)
+    ]
+    for c in unresolved[:1]:
+        cid = str(c.get("id") or "")
+        issues.append({
+            "issue": f"全文硬约束未通过：{c.get('label')}",
+            "severity": "high" if cid in (
+                "zh_generic_ending", "zh_vague", "en_vague", "en_overclaim"
+            ) else "medium",
+            "evidence": "",
+            "suggestion": _DEAI_CONSTRAINT_TIPS.get(lang, _DEAI_CONSTRAINT_TIPS["zh"]),
+            "basis": f"命中 {c.get('count')} 处，建议 {c.get('limit')}",
+            "page": 0,
+            "paragraph_id": "",
+        })
 
     suggestions: dict[str, dict] = {}
-    summary = det.get("suggestion") or ""
+    lang_prefix = "" if lang == "zh" else f"检测语言：{lang_label}。"
+    summary = lang_prefix + rate_desc + (det.get("suggestion") or "")
     llm_error = ""
     if top:
         try:
+            stats = {
+                "language": lang,
+                "sentence_count": features.get("sentence_count"),
+                "pattern_counts": det.get("pattern_counts") or {},
+                "high_risk_paragraphs": features.get("high_risk_paragraphs"),
+                "failed_constraints": constraints,
+                "ai_rate": ai_rate,
+            }
             system = DEAI_DETECT_PROMPT.format(
-                stats=json.dumps(det.get("features", {}), ensure_ascii=False),
+                language_label=lang_label,
+                language_rules=_DEAI_LANG_RULES.get(lang, _DEAI_LANG_RULES["zh"]),
+                stats=json.dumps(stats, ensure_ascii=False),
                 sentences=json.dumps([x["text"] for x in top], ensure_ascii=False),
             )
             user = (
@@ -258,13 +385,19 @@ def _diagnose_deai(gateway: LLMGateway, parsed: dict, requirement: dict,
                         "reason": str(it.get("reason") or ""),
                     }
             if data.get("summary"):
-                summary = str(data["summary"])
+                summary = lang_prefix + rate_desc + str(data["summary"])
         except Exception as e:
             logger.warning(f"AI 味改写建议生成失败，使用规则建议: {e}")
             llm_error = str(e)
 
-    issues = []
+    fallback_suggestion = (
+        "拆散套话与排比句式，补充具体信息或研究者判断。"
+        if lang == "zh"
+        else "Tie the claim to evidence, remove hype, and split long sentences."
+    )
     for item in top:
+        if len(issues) >= 8:
+            break
         sc = item.get("score", 0)
         sev = "high" if sc >= 70 else ("medium" if sc >= 40 else "low")
         page, pid = _locate_sentence(parsed, item["text"])
@@ -273,7 +406,7 @@ def _diagnose_deai(gateway: LLMGateway, parsed: dict, requirement: dict,
             "issue": "模板化表达",
             "severity": sev,
             "evidence": item["text"],
-            "suggestion": sug.get("suggestion") or "拆散套话与排比句式，补充具体信息。",
+            "suggestion": sug.get("suggestion") or fallback_suggestion,
             "basis": "；".join(item.get("reasons") or []) or "AI 文本特征",
             "page": page,
             "paragraph_id": pid,
@@ -281,11 +414,27 @@ def _diagnose_deai(gateway: LLMGateway, parsed: dict, requirement: dict,
 
     return {
         "dimension": "deai",
-        "score": det.get("score", 0),
+        "score": max(0, 100 - ai_score),
+        "ai_score": ai_score,
+        "ai_rate": ai_rate,
+        "language": lang,
+        "language_label": lang_label,
+        "level": det.get("level"),
+        "ai_rate_level": est.get("level"),
         "summary": summary,
         "issues": issues,
-        "level": det.get("level"),
-        "features": det.get("features", {}),
+        "patterns": patterns,
+        "features": features,
+        "ai_rate_features": est.get("features", {}),
+        "paragraph_risk": {
+            "high": sum(1 for p in paragraphs if p.get("risk") == "high"),
+            "medium": sum(1 for p in paragraphs if p.get("risk") == "medium"),
+        },
+        "constraints": constraints,
+        "disclaimer": (
+            "AI 生成率为规则估算（支持中英文），仅供参考，"
+            "与学校 AIGC 检测系统的结果可能存在差异。"
+        ),
         "llm_error": llm_error,
         "stale": False,
         "generated_at": _now(),
@@ -319,8 +468,12 @@ def total_score(paper_id: str) -> float | None:
 
 
 def diagnose(paper_id: str, llm, dimensions: list[str] | None = None,
-             progress=None) -> dict:
-    """执行四维诊断并返回聚合报告。"""
+             progress=None, should_cancel=None) -> dict:
+    """执行四维诊断并返回聚合报告；progress(stage, msg, percent) 汇报进度。
+
+    should_cancel() 返回 True 时在维度之间停止诊断（当前维度会执行完），
+    抛出 DiagnosisCancelled，已完成维度的结果保留在磁盘上。
+    """
     meta = store.load_meta(paper_id)
     parsed = store.load_parsed(paper_id)
     requirement = store.load_requirement(paper_id) or {}
@@ -334,22 +487,28 @@ def diagnose(paper_id: str, llm, dimensions: list[str] | None = None,
     gateway = LLMGateway(llm)
     results: dict[str, dict] = {}
     errors: dict[str, str] = {}
+    total = len(dims)
 
-    for dim in dims:
+    for idx, dim in enumerate(dims):
+        if should_cancel and should_cancel():
+            raise DiagnosisCancelled("诊断已取消")
         label = DIAGNOSIS_DIMENSIONS[dim]["label"]
         if progress:
-            progress("diagnose", f"开始诊断：{label}")
+            progress("diagnose", f"开始诊断：{label}（{idx + 1}/{total}）",
+                     round(idx * 100 / total))
         try:
             result = _HANDLERS[dim](gateway, parsed, requirement, paper_id)
             store.save_analysis(paper_id, dim, result)
             results[dim] = result
             if progress:
-                progress("diagnose", f"完成：{label}（{result.get('score')} 分）")
+                progress("diagnose", f"完成：{label}（{result.get('score')} 分）",
+                         round((idx + 1) * 100 / total))
         except Exception as e:
             logger.exception(f"诊断维度失败 {dim}")
             errors[dim] = str(e)
             if progress:
-                progress("diagnose", f"失败：{label}（{e}）")
+                progress("diagnose", f"失败：{label}（{e}）",
+                         round((idx + 1) * 100 / total))
 
     all_done = all(store.has_analysis(paper_id, d) for d in DIAGNOSIS_DIMENSIONS)
     try:

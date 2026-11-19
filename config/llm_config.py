@@ -5,7 +5,6 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "label": "智谱 GLM",
         "default_model": "glm-4-flash",
         "models": ["glm-4-flash", "glm-4", "glm-4-air"],
-        "embedding_model": "embedding-3",
         "context_window": 128000,
         "supports_tools": True,
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
@@ -15,7 +14,6 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "label": "通义千问",
         "default_model": "qwen-plus",
         "models": ["qwen-plus", "qwen-turbo", "qwen-max"],
-        "embedding_model": "text-embedding-v3",
         "context_window": 131072,
         "supports_tools": True,
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -25,7 +23,6 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "label": "DeepSeek",
         "default_model": "deepseek-chat",
         "models": ["deepseek-chat", "deepseek-reasoner"],
-        "embedding_model": None,
         "context_window": 64000,
         "supports_tools": True,
         "base_url": "https://api.deepseek.com/v1",
@@ -36,7 +33,6 @@ PROVIDER_CONFIG: dict[str, dict] = {
         # URL/Key/模型名均由用户运行时填写（侧边栏/设置页），不预设
         "default_model": "",
         "models": [],
-        "embedding_model": "",
         "context_window": 128000,
         "supports_tools": True,
         "base_url": "",
@@ -47,7 +43,6 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "label": "Ollama (本地)",
         "default_model": "qwen2.5:7b",
         "models": ["qwen2.5:7b", "llama3.1:8b", "qwen2.5:14b"],
-        "embedding_model": "nomic-embed-text",
         "context_window": 32768,
         "supports_tools": True,
         "base_url": "http://localhost:11434/v1",
@@ -59,8 +54,6 @@ PROVIDER_CONFIG: dict[str, dict] = {
         # 模型由 LM Studio 动态加载，留空表示运行时通过 /v1/models 自动发现
         "default_model": "",
         "models": [],
-        # embedding 模型需在 LM Studio 中手动加载（如 nomic-embed-text/bge）
-        "embedding_model": "",
         "context_window": 32768,
         "supports_tools": True,
         "base_url": "http://localhost:1234/v1",

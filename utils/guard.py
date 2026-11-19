@@ -90,8 +90,7 @@ def is_off_topic(text: str) -> bool:
 def gate(text: str, has_paper: bool) -> dict:
     """统一入口：返回 {allowed, reason, reply}。
 
-    has_paper 由调用方给出：/api/paper/{id}/ask 绑定 paper_id 时恒为 True；
-    /api/chat 在 PAPER_ONLY_MODE 下按 paper_id 或正文信号判断。
+    has_paper 由调用方给出：/api/paper/{id}/ask 绑定 paper_id 时恒为 True。
     """
     t = (text or "").strip()
     if not t:

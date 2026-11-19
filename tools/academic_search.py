@@ -95,7 +95,7 @@ class AcademicSearchTool(BaseTool):
         """Crossref API：国际期刊论文元数据（mailto 进入礼貌池，降低 429）。
 
         返回含被引次数（is-referenced-by-count，用于识别重点论文）与
-        开放获取全文链接（link 字段，供 paper_ingest 下载入库）。
+        开放获取全文链接（link 字段）。
         """
         import requests
 

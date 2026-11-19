@@ -23,7 +23,10 @@ SKIP_DATA_PREFIXES = (
     "data/papers/", "data/reports/", "data/uploads/",
     "data/cache/", "data/chroma_db/",
 )
-SKIP_DATA_FILES = {"data/quota.json", "data/ui_prefs.json", "data/kb_names.json"}
+SKIP_DATA_FILES = {
+    "data/quota.json", "data/ui_prefs.json", "data/kb_names.json",
+    "data/admin.json", "data/admin_credentials.txt", "data/admin_sessions.json",
+}
 
 PATTERNS = {
     "OpenAI 风格 API Key": re.compile(r"sk-[A-Za-z0-9_-]{10,}"),

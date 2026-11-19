@@ -1,11 +1,17 @@
 # -*- coding: utf-8 -*-
-"""PDF 校验与结构解析。"""
+"""PDF / Word 校验与结构解析。"""
 import pytest
 
 from paper import parser
-from paper.parser import PDFValidationError, parse_pdf, validate_pdf
+from paper.parser import (
+    PDFValidationError, UploadValidationError, parse_docx, parse_pdf,
+    validate_pdf, validate_upload,
+)
 
 fitz = pytest.importorskip("fitz")
+docx = pytest.importorskip("docx")
+
+DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
 SAMPLE_LINES = [
@@ -59,6 +65,24 @@ def test_validate_rejects(name, head, ctype, msg):
 
 def test_validate_without_content_type():
     validate_pdf("a.pdf", b"%PDF-1.4")
+
+
+def test_validate_upload_accepts_pdf_and_docx():
+    assert validate_upload("a.PDF", b"%PDF-1.7", "application/pdf") == "pdf"
+    assert validate_upload("a.docx", b"PK\x03\x04rest", DOCX_MIME) == "docx"
+    assert validate_upload("a.docx", b"PK\x03\x04rest", "application/octet-stream") == "docx"
+
+
+@pytest.mark.parametrize("name,head,ctype,msg", [
+    ("a.doc", b"PK\x03\x04", "application/msword", "旧版 .doc"),
+    ("a.txt", b"hello", "text/plain", "仅支持 PDF"),
+    ("a.docx", b"not-a-zip", DOCX_MIME, "ZIP 文件头"),
+    ("a.docx", b"PK\x03\x04rest", "text/plain", "Content-Type"),
+])
+def test_validate_upload_rejects(name, head, ctype, msg):
+    with pytest.raises(UploadValidationError) as ei:
+        validate_upload(name, head, ctype)
+    assert msg in str(ei.value)
 
 
 # ---------- 解析 ----------
@@ -125,3 +149,78 @@ def test_parse_invalid_file(tmp_path):
     with pytest.raises(ValueError) as ei:
         parse_pdf(str(path))
     assert "PDF 打开失败" in str(ei.value)
+
+
+# ---------- Word 解析 ----------
+def _make_docx(path, title=""):
+    document = docx.Document()
+    document.core_properties.title = title
+    document.add_paragraph("基于深度学习的人脸识别研究")
+    document.add_paragraph("摘要", style="Heading 1")
+    document.add_paragraph(
+        "本文研究了人脸识别中的特征提取方法，提出了一种改进的卷积神经网络结构，"
+        "并在公开数据集上验证了方法的有效性，实验结果表明准确率有明显提升。"
+    )
+    document.add_paragraph("关键词：人脸识别；深度学习；卷积神经网络")
+    document.add_paragraph("1 绪论", style="Heading 1")
+    document.add_paragraph("近年来，人脸识别技术发展迅速，被广泛应用于身份认证等领域。")
+    document.add_paragraph("1.1 研究背景", style="Heading 2")
+    document.add_paragraph("现有方法在光照变化和遮挡场景下仍然存在不足，需要进一步改进。")
+    document.add_paragraph("图 1 网络结构示意图")
+    document.add_paragraph("参考文献", style="Heading 1")
+    document.add_paragraph("[1] 张三. 人脸识别研究[J]. 计算机学报, 2020, 43(5): 1-10.")
+    document.save(str(path))
+    return path
+
+
+def test_parse_docx_structure(tmp_path):
+    path = _make_docx(tmp_path / "paper.docx")
+    parsed = parse_docx(str(path))
+    assert parsed["title"] == "基于深度学习的人脸识别研究"
+    assert parsed["pages"] >= 1
+    assert parsed["text_chars"] >= parser.MIN_TEXT_CHARS
+
+    titles = [(s["level"], s["title"]) for s in parsed["sections"]]
+    assert (1, "摘要") in titles
+    assert (1, "1 绪论") in titles
+    assert (2, "1.1 研究背景") in titles
+    assert (1, "参考文献") in titles
+
+    types = {p["type"] for p in parsed["paragraphs"]}
+    assert {"heading", "body", "caption", "reference"} <= types
+    assert "人脸识别" in parsed["keywords"]
+    assert parsed["abstract"].startswith("本文研究了人脸识别")
+    assert parsed["paragraphs"][-1]["text"].startswith("[1]")
+
+
+def test_parse_docx_uses_core_title(tmp_path):
+    path = _make_docx(tmp_path / "paper.docx", title="核心属性标题")
+    assert parse_docx(str(path))["title"] == "核心属性标题"
+
+
+def test_parse_docx_title_falls_back_to_upload_name(tmp_path):
+    document = docx.Document()
+    document.add_paragraph("这是一段没有标题的正文，" * 20)
+    path = tmp_path / "original.docx"
+    document.save(str(path))
+    parsed = parse_docx(str(path), "我的论文.docx")
+    assert parsed["title"] == "我的论文"
+    assert parse_docx(str(path))["title"] == "original"
+
+
+def test_parse_docx_empty_rejected(tmp_path):
+    document = docx.Document()
+    document.add_paragraph("太短")
+    path = tmp_path / "empty.docx"
+    document.save(str(path))
+    with pytest.raises(ValueError) as ei:
+        parse_docx(str(path))
+    assert "有效文本" in str(ei.value)
+
+
+def test_parse_docx_invalid_file(tmp_path):
+    path = tmp_path / "broken.docx"
+    path.write_bytes(b"PK\x03\x04 not really a docx")
+    with pytest.raises(ValueError) as ei:
+        parse_docx(str(path))
+    assert "Word 打开失败" in str(ei.value)

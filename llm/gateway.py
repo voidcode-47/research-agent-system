@@ -7,7 +7,7 @@ import re
 import time
 
 from config.paper import LLM_TASKS
-from utils import quota
+from utils import auth, quota
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +24,29 @@ class _ModelCallFailed(RuntimeError):
 
 def _provider_error(content: str) -> bool:
     return (content or "").strip().startswith(_PROVIDER_ERROR_PREFIXES)
+
+
+def _unbalanced(text: str) -> bool:
+    """检测 JSON 是否被截断（括号/字符串未闭合）。"""
+    depth = 0
+    in_str = False
+    escaped = False
+    for ch in text or "":
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+    return in_str or depth > 0
 
 
 def extract_json(text: str):
@@ -90,9 +113,10 @@ class LLMGateway:
             raise ValueError(f"不允许的 LLM 任务类型：{task_type}")
         limit = min(int(max_tokens or task["max_tokens"]), int(task["max_tokens"]))
 
-        # 先检查再消耗：超限时不发起模型调用
-        quota.check(self.quota_key)
-        quota.consume(self.quota_key)
+        # 先检查再消耗：超限时不发起模型调用；管理员不限额度且不占用普通用户配额
+        unlimited = auth.is_admin()
+        quota.check(self.quota_key, unlimited=unlimited)
+        quota.consume(self.quota_key, unlimited=unlimited)
 
         msgs = list(messages)
         last_err: Exception | None = None
@@ -113,6 +137,8 @@ class LLMGateway:
                         raise _ModelCallFailed(msg)
                     raise ValueError("模型输出不是合法 JSON")
                 if validator is not None and not validator(data):
+                    if _unbalanced(content):
+                        raise ValueError("模型输出不完整（可能超出长度上限被截断）")
                     raise ValueError("模型输出未通过结构校验")
                 self._audit(task_type, paper_id, resp, started, True)
                 return data

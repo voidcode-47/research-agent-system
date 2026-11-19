@@ -86,7 +86,3 @@ class BaseLLM(ABC):
     def list_models(self) -> list[str]:
         """列出远端可用模型。云端提供商默认返回空（用静态配置）。"""
         return []
-
-    def embed(self, texts: list[str]) -> list[list[float]]:
-        """默认不实现，由 EmbeddingProvider 处理。"""
-        raise NotImplementedError(f"{self.provider} 不直接提供 embedding")

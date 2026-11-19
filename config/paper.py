@@ -72,23 +72,23 @@ PAPER_LEVELS: dict[str, dict] = {
 DIAGNOSIS_DIMENSIONS: dict[str, dict] = {
     "level": {
         "label": "论文层次",
-        "weight": 0.30,
+        "weight": 0.25,
         "description": "对照目标层次的字数、结构、创新性与深度要求打分",
     },
     "feasibility": {
         "label": "内容可实现性",
-        "weight": 0.25,
+        "weight": 0.20,
         "description": "评估问题清晰度、方法可执行性、数据可得性、工作量与创新点",
     },
     "format": {
         "label": "正文格式",
-        "weight": 0.25,
+        "weight": 0.20,
         "description": "章节、编号、图表题注、参考文献与排版规范检查",
     },
     "deai": {
-        "label": "正文去 AI 味",
-        "weight": 0.20,
-        "description": "识别套话、机械连接、句式单一等模板化特征",
+        "label": "AI 率",
+        "weight": 0.35,
+        "description": "识别套话、机械连接、句式单一等模板化特征，并估算 AI 生成率",
     },
 }
 
@@ -153,6 +153,7 @@ LLM_TASKS: dict[str, dict] = {
     "feasibility": {"label": "内容可实现性评估", "max_tokens": 2500},
     "deai_detect": {"label": "AI 味检测与建议", "max_tokens": 1600},
     "deai_rewrite": {"label": "段落改写", "max_tokens": 1600},
+    "rewrite_guide": {"label": "全局改写方针", "max_tokens": 4096},
     "paper_qa": {"label": "论文问答", "max_tokens": 1500},
 }
 

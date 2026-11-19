@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<link rel="stylesheet" href="/style.css?v=2.4.1">
+<link rel="stylesheet" href="/style.css?v=2.8.3">
 </head>
 <body>
 <div class="layout">
@@ -33,8 +33,13 @@
       <div id="conn-status"></div>
     </div>
 
+    <div class="sidebar-auth">
+      <div id="auth-status" class="auth-status">普通用户 · 模型只读</div>
+      <button id="btn-auth" class="btn btn-ghost btn-block-auth">管理员登录</button>
+    </div>
+
     <div class="sidebar-footer">
-      <div class="status-line"><span class="dot dot-on"></span> v2.0 · 本地运行</div>
+      <div class="status-line"><span class="dot dot-on"></span> v3.0 · 本地运行</div>
       <div class="status-line"><span class="dot" id="srv-dot"></span> <span id="srv-txt">连接中...</span></div>
     </div>
   </aside>
@@ -47,13 +52,14 @@
       <div class="view-header">
         <div class="view-title">
           <h1>论文诊断与优化</h1>
-          <p class="view-sub">上传 PDF → 需求确认 → 四维诊断 → 相似论文 → 段落改写 → 导出 Word。只做诊断、建议与局部改写，不代写整篇论文。</p>
+          <p class="view-sub">上传 PDF / Word → 需求确认 → 四维诊断 → 相似论文 → 段落改写 → 导出 Word / PDF。只做诊断、建议与局部改写，不代写整篇论文。</p>
         </div>
         <div class="toolbar">
           <select id="paper-select" class="input" title="历史论文">
             <option value="">选择论文...</option>
           </select>
           <button id="btn-paper-refresh" class="btn btn-ghost">刷新</button>
+          <button id="btn-paper-new" class="btn btn-ghost">新建</button>
           <button id="btn-paper-delete" class="btn btn-ghost">删除</button>
         </div>
       </div>
@@ -71,11 +77,23 @@
       <!-- ① 上传 -->
       <div class="paper-step-panel active" id="paper-step-1">
         <div class="card">
-          <div class="section-title">① 上传论文 PDF</div>
-          <p class="muted">仅支持 PDF 文件（≤50MB、≤200 页）。扫描件需先 OCR 后再上传；解析结果会持久化保存在本机 <code>data/papers/</code>。</p>
+          <div class="section-title">① 上传论文（PDF / Word）</div>
+          <p class="muted">支持 PDF 与 Word（.docx）文件（≤50MB；PDF ≤200 页）。扫描件需先 OCR 后再上传；Word 页码按字数估算；解析结果会持久化保存在本机 <code>data/papers/</code>。</p>
           <div class="row">
-            <input type="file" id="paper-file" class="input file-input" accept=".pdf,application/pdf">
+            <input type="file" id="paper-file" class="input file-input" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
             <button id="btn-paper-upload" class="btn btn-primary">上传并解析</button>
+          </div>
+          <div class="paper-task-progress hidden" id="paper-upload-progress">
+            <div class="diag-progress-head">
+              <span id="paper-upload-stage">正在上传…</span>
+              <b id="paper-upload-percent">0%</b>
+            </div>
+            <div class="diag-progress-track">
+              <div class="diag-progress-fill" id="paper-upload-fill"></div>
+            </div>
+            <div class="paper-guide-progress-actions">
+              <button id="btn-paper-upload-cancel" class="btn btn-ghost">取消上传</button>
+            </div>
           </div>
           <div id="paper-upload-result" class="paper-result"></div>
         </div>
@@ -127,7 +145,17 @@
           <div class="section-title">③ 四维诊断</div>
           <div class="row">
             <button id="btn-paper-diagnose" class="btn btn-primary">开始诊断</button>
+            <button id="btn-paper-cancel" class="btn btn-ghost hidden">取消诊断</button>
             <span id="paper-quota" class="hint-line"></span>
+          </div>
+          <div class="paper-diag-progress hidden" id="paper-diag-progress">
+            <div class="diag-progress-head">
+              <span id="paper-diag-stage">正在准备诊断…</span>
+              <b id="paper-diag-percent">0%</b>
+            </div>
+            <div class="diag-progress-track">
+              <div class="diag-progress-fill" id="paper-diag-fill"></div>
+            </div>
           </div>
           <div class="paper-total" id="paper-total-score"></div>
           <div id="paper-dim-cards" class="paper-dim-cards"></div>
@@ -144,7 +172,17 @@
           <div class="row">
             <button id="btn-paper-similar" class="btn btn-primary">查找相似论文</button>
             <button id="btn-paper-similar-refresh" class="btn btn-ghost">重新检索</button>
+            <button id="btn-paper-similar-cancel" class="btn btn-ghost hidden">取消检索</button>
             <span id="paper-similar-status" class="hint-line"></span>
+          </div>
+          <div class="paper-task-progress hidden" id="paper-similar-progress">
+            <div class="diag-progress-head">
+              <span id="paper-similar-stage">正在检索…</span>
+              <b id="paper-similar-percent">0%</b>
+            </div>
+            <div class="diag-progress-track">
+              <div class="diag-progress-fill" id="paper-similar-fill"></div>
+            </div>
           </div>
           <div id="paper-similar-list" class="paper-similar-list"></div>
         </div>
@@ -159,12 +197,58 @@
               <select id="paper-section-filter" class="input">
                 <option value="">全部章节</option>
               </select>
-              <button id="btn-paper-export" class="btn btn-ghost">导出 Word</button>
             </div>
+            <div class="row paper-export-row">
+              <button id="btn-paper-export" class="btn btn-ghost">导出 Word</button>
+              <button id="btn-paper-export-pdf" class="btn btn-ghost">导出 PDF</button>
+              <button id="btn-paper-export-summary" class="btn btn-ghost">导出修改说明</button>
+            </div>
+            <div class="paper-batch-bar">
+              <button id="btn-paper-batch" class="btn btn-primary" disabled>批量改写选中（0）</button>
+              <button id="btn-paper-batch-clear" class="btn btn-ghost">清空选择</button>
+            </div>
+            <div class="paper-task-progress hidden" id="paper-batch-progress">
+              <div class="diag-progress-head">
+                <span id="paper-batch-stage">正在批量改写…</span>
+                <b id="paper-batch-percent">0%</b>
+              </div>
+              <div class="diag-progress-track">
+                <div class="diag-progress-fill" id="paper-batch-fill"></div>
+              </div>
+              <div class="paper-guide-progress-actions">
+                <button id="btn-paper-batch-cancel" class="btn btn-ghost">取消批量改写</button>
+              </div>
+            </div>
+            <div id="paper-batch-results" class="paper-batch-results"></div>
             <div id="paper-paragraph-list" class="paper-para-list"></div>
           </div>
           <div class="card">
             <div class="section-title">段落改写（逐段确认）</div>
+            <div class="paper-guide">
+              <div class="paper-guide-head">
+                <div>
+                  <div class="paper-guide-title">全局改写方针</div>
+                  <div class="hint-line" id="paper-guide-status">先分析全文术语、重复句式与章节过渡，再逐段改写。</div>
+                </div>
+                <button id="btn-paper-guide" class="btn btn-ghost">生成方针</button>
+              </div>
+              <div class="paper-guide-progress hidden" id="paper-guide-progress">
+                <div class="diag-progress-head">
+                  <span id="paper-guide-stage">正在准备生成…</span>
+                  <b id="paper-guide-percent">0%</b>
+                </div>
+                <div class="diag-progress-track">
+                  <div class="diag-progress-fill" id="paper-guide-fill"></div>
+                </div>
+                <div class="paper-guide-progress-actions">
+                  <button id="btn-paper-guide-cancel" class="btn btn-ghost">取消生成</button>
+                </div>
+              </div>
+              <div id="paper-guide-body" class="paper-guide-body hidden"></div>
+              <label class="paper-guide-toggle hidden" id="paper-guide-toggle">
+                <input type="checkbox" id="paper-guide-use" checked> 改写时应用全局方针
+              </label>
+            </div>
             <div class="paper-original" id="paper-original">在左侧选择一个正文段落。</div>
             <div class="paper-form-grid">
               <div>
@@ -177,63 +261,46 @@
             <input id="paper-instruction" class="input" placeholder="例如：压缩到 200 字以内，保留原有数据">
             <div class="topic-actions">
               <button id="btn-paper-rewrite" class="btn btn-primary">生成改写</button>
+              <button id="btn-paper-rewrite-cancel" class="btn btn-ghost hidden">取消改写</button>
               <button id="btn-paper-adopt" class="btn hidden">采纳并保存</button>
+            </div>
+            <div class="paper-task-progress hidden" id="paper-rewrite-progress">
+              <div class="diag-progress-head">
+                <span id="paper-rewrite-stage">正在改写…</span>
+                <b id="paper-rewrite-percent">0%</b>
+              </div>
+              <div class="diag-progress-track">
+                <div class="diag-progress-fill" id="paper-rewrite-fill"></div>
+              </div>
             </div>
             <div id="paper-rewrite-warning" class="paper-warning hidden"></div>
             <div id="paper-rewrite-meta" class="hint-line"></div>
+            <div id="paper-diff-tools" class="diff-tools hidden">
+              <span id="paper-diff-count"></span>
+              <div>
+                <button id="btn-diff-keep-all" class="btn btn-ghost">全部保留</button>
+                <button id="btn-diff-revert-all" class="btn btn-ghost">全部还原</button>
+              </div>
+            </div>
             <div id="paper-diff" class="paper-diff"></div>
+            <div class="hint-line" id="paper-diff-hint"></div>
           </div>
         </div>
       </div>
 
-      <div class="paper-ask-bar" id="paper-ask-bar">
-        <input id="paper-ask-input" class="input" placeholder="针对论文提问，例如：第三章的方法和结论是否对应？" autocomplete="off">
-        <button id="btn-paper-ask" class="btn btn-primary">提问</button>
+      <div class="paper-ask-dock" id="paper-ask-dock">
         <div id="paper-ask-answer" class="paper-ask-answer hidden"></div>
-      </div>
-    </section>
-
-    <!-- ===== 对话页（保留功能，平台不提供自由聊天入口） ===== -->
-    <section id="view-chat" class="view">
-      <div class="view-header">
-        <div class="view-title">
-          <h1>智能对话</h1>
-          <p class="view-sub">与 AI 助手对话，支持深度检索与知识库问答</p>
+        <div class="paper-ask-bar" id="paper-ask-bar">
+          <button id="btn-ask-toggle" class="paper-ask-toggle" type="button"
+                  aria-label="针对论文提问" aria-expanded="false" title="针对论文提问">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>
+            </svg>
+          </button>
+          <input id="paper-ask-input" class="input" placeholder="针对论文提问，例如：第三章的方法和结论是否对应？" autocomplete="off">
+          <button id="btn-paper-ask" class="btn btn-primary">提问</button>
         </div>
-        <div class="toolbar chat-toolbar">
-          <select id="chat-mode" class="input">
-            <option value="auto">自动模式</option>
-            <option value="deep">深度检索</option>
-            <option value="chat">纯聊天</option>
-          </select>
-          <select id="chat-tools" class="input tools-select" multiple size="1" title="深度检索时启用的工具（Ctrl 多选）">
-            <option value="web_search_cn" selected>网页搜索(国内)</option>
-            <option value="academic_search" selected>学术检索</option>
-            <option value="web_scraper" selected>网页抓取</option>
-            <option value="web_search">网页搜索(国际)</option>
-          </select>
-          <label class="chk"><input type="checkbox" id="chat-rag"> 知识库</label>
-          <select id="chat-sessions" class="input session-select" title="历史会话">
-            <option value="">会话历史</option>
-          </select>
-          <button id="btn-session-menu" class="btn btn-ghost" title="会话管理（置顶/删除）">⋯</button>
-          <button id="btn-new-chat" class="btn btn-ghost">新建对话</button>
-          <button id="btn-clear-chat" class="btn btn-ghost">清空</button>
-        </div>
-      </div>
-      <div id="chat-messages" class="chat-area">
-        <div class="chat-hint">输入问题开始对话。普通问题快速回答，研究类问题自动深度检索。</div>
-      </div>
-      <div class="chat-input-row">
-        <input id="chat-input" class="input" placeholder="输入你的问题，回车发送..." autocomplete="off">
-        <button id="btn-send" class="btn btn-primary">发送</button>
-      </div>
-      <div id="session-menu" class="popover hidden">
-        <div class="session-menu-head">
-          <span>会话管理</span>
-          <button id="btn-session-close" class="sess-close" title="收起会话栏">✕</button>
-        </div>
-        <div id="session-list"></div>
       </div>
     </section>
 
@@ -312,54 +379,6 @@
       </div>
     </section>
 
-    <!-- ===== 知识库页 ===== -->
-    <section id="view-knowledge" class="view">
-      <div class="view-header"><h1>知识库管理</h1></div>
-      <div class="kb-guide">
-        <span>① 创建知识库</span><b>→</b><span>② 上传文档 / 抓取 URL</span><b>→</b><span>③ 检索测试验证效果</span>
-      </div>
-      <div id="kb-status"></div>
-
-      <div class="card kb-collections-card">
-        <div class="section-title">集合管理</div>
-        <div class="row">
-          <input id="kb-new-name" class="input" placeholder="新建知识库名称">
-          <button id="btn-kb-create" class="btn">创建</button>
-        </div>
-        <div id="kb-collections"></div>
-      </div>
-
-      <div class="kb-ops-row">
-        <div class="card">
-          <div class="section-title">上传文档</div>
-          <label class="lbl">目标知识库</label>
-          <select id="kb-upload-collection" class="input"></select>
-          <input type="file" id="kb-files" class="input file-input" multiple accept=".pdf,.txt,.md,.html">
-          <button id="btn-kb-upload" class="btn btn-primary">入库</button>
-          <div id="kb-upload-result"></div>
-        </div>
-
-        <div class="card">
-          <div class="section-title">URL 抓取</div>
-          <div class="row">
-            <input id="kb-url" class="input" placeholder="https://example.com/article">
-            <button id="btn-kb-url" class="btn">抓取入库</button>
-          </div>
-          <div id="kb-url-result" class="kb-result-box"></div>
-        </div>
-
-        <div class="card">
-          <div class="section-title">检索测试</div>
-          <div class="row">
-            <input id="kb-query" class="input" placeholder="输入查询词">
-            <select id="kb-search-collection" class="input"></select>
-          </div>
-          <button id="btn-kb-search" class="btn btn-primary">检索</button>
-          <div id="kb-search-result" class="kb-result-box"></div>
-        </div>
-      </div>
-    </section>
-
     <!-- ===== 设置页 ===== -->
     <section id="view-settings" class="view">
       <div class="view-header"><h1>设置</h1></div>
@@ -384,6 +403,9 @@
         <div class="card card-span">
           <div class="section-title">模型提供商</div>
           <p class="muted">各提供商的 API Key 与接口地址。云提供商 Key 保存到本地 .env，不会上传；本地服务填服务地址即可。</p>
+          <div id="settings-readonly" class="hint-line hidden">
+            普通用户不能修改模型配置，以下为管理员设定的当前模型。如需更换模型，请登录管理员账号。
+          </div>
           <div id="provider-config-list" class="prov-grid"></div>
         </div>
         <div class="card">
@@ -417,7 +439,28 @@
 
   </main>
 </div>
-<script src="/app.js?v=2.5.0"></script>
-<script src="/paper.js?v=1.0.1"></script>
+
+<!-- ======================= 管理员登录 ======================= -->
+<div id="login-modal" class="modal-mask hidden">
+  <div class="modal-card">
+    <div class="modal-title">管理员登录</div>
+    <p class="muted">管理员可修改模型配置，且不受每日调用额度限制。</p>
+    <form id="login-form">
+      <label class="lbl" for="login-user">用户名</label>
+      <input id="login-user" class="input" type="text" autocomplete="username" spellcheck="false">
+      <label class="lbl" for="login-pass">密码</label>
+      <input id="login-pass" class="input" type="password" autocomplete="current-password">
+      <div id="login-error" class="hint-line stale"></div>
+      <div class="modal-actions">
+        <button type="button" id="btn-login-cancel" class="btn btn-ghost">取消</button>
+        <button type="submit" id="btn-login-submit" class="btn btn-primary">登录</button>
+      </div>
+    </form>
+    <p class="hint-line">首次启动的初始密码保存在本机 <code>data/admin_credentials.txt</code>。</p>
+  </div>
+</div>
+
+<script src="/app.js?v=3.1.0"></script>
+<script src="/paper.js?v=1.9.6"></script>
 </body>
 </html>

@@ -106,14 +106,32 @@ def _cache_fresh(data: dict | None) -> bool:
     return (datetime.datetime.now() - ts) <= datetime.timedelta(days=CACHE_DAYS)
 
 
+class SimilarCancelled(Exception):
+    """用户取消相似论文检索。"""
+
+
 def find_similar(parsed: dict, requirement: dict | None = None, limit: int = 10,
-                 refresh: bool = False, paper_id: str = "") -> dict:
-    """检索相似论文；paper_id 存在时读写 similar.json 缓存。"""
+                 refresh: bool = False, paper_id: str = "", progress=None,
+                 should_cancel=None) -> dict:
+    """检索相似论文；paper_id 存在时读写 similar.json 缓存。
+
+    progress(percent, stage) 汇报进度；should_cancel() 为真时抛 SimilarCancelled。
+    """
     from paper import store  # 延迟导入，避免循环依赖
 
+    def report(percent: int, stage: str) -> None:
+        if progress:
+            progress(max(0, min(100, int(percent))), stage)
+
+    def check() -> None:
+        if should_cancel and should_cancel():
+            raise SimilarCancelled("相似论文检索已取消")
+
+    check()
     if paper_id and not refresh:
         cached = store.load_similar(paper_id)
         if _cache_fresh(cached):
+            report(100, "已使用 7 天内的缓存结果")
             return {**cached, "cached": True}
 
     terms = _query_terms(parsed)
@@ -126,18 +144,25 @@ def find_similar(parsed: dict, requirement: dict | None = None, limit: int = 10,
     per_query = max(8, min(int(limit or 10) * 2, 20))
     collected: dict[str, dict] = {}
     errors: list[str] = []
+    total_queries = max(1, len(terms) * 2)
+    done = 0
 
     for term in terms:
         for source_name, search in (
             ("Crossref", tool._search_crossref),
             ("OpenAlex", tool._search_openalex),
         ):
+            check()
+            report(5 + int(65 * done / total_queries),
+                   f"正在检索 {source_name}：{term[:30]}…")
             try:
                 items = search(term, per_query) or []
             except Exception as e:
                 logger.warning(f"相似论文检索失败 {source_name} {term}: {e}")
                 errors.append(f"{source_name} 检索失败")
+                done += 1
                 continue
+            done += 1
             for it in items:
                 if not isinstance(it, dict) or not (it.get("title") or "").strip():
                     continue
@@ -145,10 +170,12 @@ def find_similar(parsed: dict, requirement: dict | None = None, limit: int = 10,
                 if key not in collected:
                     collected[key] = dict(it)
 
+    check()
     if not collected:
         detail = "；".join(dict.fromkeys(errors)) or "未检索到相关论文"
         return {"items": [], "error": detail, "updated_at": _now(), "cached": False}
 
+    report(75, "正在按相关度排序…")
     query_tokens = _tokens(" ".join(terms) + " " + " ".join(keywords))
     scored = []
     for it in collected.values():
@@ -189,9 +216,11 @@ def find_similar(parsed: dict, requirement: dict | None = None, limit: int = 10,
         "cached": False,
         "cache_days": CACHE_DAYS,
     }
+    check()
     if paper_id:
         try:
             store.save_similar(paper_id, result)
         except Exception as e:
             logger.warning(f"相似论文缓存写入失败: {e}")
+    report(100, "检索完成")
     return result

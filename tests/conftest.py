@@ -1,7 +1,7 @@
 """pytest 全局 fixtures。"""
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -29,13 +29,3 @@ def mock_chat_response():
     """模拟对话响应。"""
     from llm.base import ChatResponse
     return ChatResponse(content="测试回复", usage={"total_tokens": 50})
-
-
-@pytest.fixture
-def temp_vector_store(tmp_path):
-    """临时向量存储（不初始化 embedding）。"""
-    with patch("tools.vector_store.VectorStore.__init__", return_value=None):
-        from tools.vector_store import VectorStore
-        vs = VectorStore()
-        vs._client = MagicMock()
-        return vs

@@ -1,6 +1,6 @@
 """工具基类与注册表。
 
-定义统一接口，用注册表模式让 Agent 自动发现可用工具。
+定义统一接口，用注册表模式自动发现可用工具。
 """
 from abc import ABC, abstractmethod
 from typing import Any, Optional
@@ -11,19 +11,11 @@ logger = get_logger(__name__)
 
 
 class BaseTool(ABC):
-    """工具抽象基类。
-
-    Attributes:
-        dangerous: 标记该工具可能执行破坏性操作（如 shell/终端/文件删除）。
-            为 True 时，ReActAgent 在执行前会用 SafetyGuard.check_destructive
-            做运行时硬拦截（与 config.prompts.SAFETY_CONSTRAINTS 提示配合）。
-            默认 False，搜索/抓取等只读工具保持不变。
-    """
+    """工具抽象基类。"""
 
     name: str = ""
     description: str = ""
     parameters: dict = {"type": "object", "properties": {}}
-    dangerous: bool = False
 
     @abstractmethod
     def execute(self, **kwargs) -> str:
