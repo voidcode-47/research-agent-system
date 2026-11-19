@@ -203,4 +203,3 @@ def test_english_paragraph_risk():
     ids = {c["id"] for c in r["constraints"]}
     assert "en_connectives" in ids
     assert "en_overclaim" in ids
-

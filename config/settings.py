@@ -1,5 +1,7 @@
 """全局配置，从 .env 加载。所有 key 可选，留空则该提供商不可用。"""
 from pathlib import Path
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -43,8 +45,14 @@ class Settings(BaseSettings):
     # 论文工作台数据目录（papers/index.json 与各 paper_id 子目录）
     PAPER_DATA_DIR: str = "./data/papers"
 
+    # 论文后台任务并发与队列上限（启动时生效，修改后需重启）
+    PAPER_TASK_WORKERS: int = Field(default=3, ge=1, le=16)
+    PAPER_MAX_ACTIVE_TASKS: int = Field(default=12, ge=1, le=100)
+    # 已结束任务在内存中的保留分钟数；0 表示不按时间清理，仅受数量硬上限
+    PAPER_TASK_RETENTION_MINUTES: int = Field(default=1440, ge=0, le=525600)
+
     # 每日 LLM 调用配额（按 key 计数，论文任务默认 local）
-    DAILY_QUOTA: int = 30
+    DAILY_QUOTA: int = Field(default=30, ge=0)
 
     # 管理员账号：可修改模型且不受每日配额限制
     ADMIN_USERNAME: str = "admin"

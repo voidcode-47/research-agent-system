@@ -4,7 +4,6 @@
 结果缓存 7 天；网络失败返回空列表 + error，不抛 500。
 """
 import datetime
-import os
 import re
 
 from tools.academic_search import AcademicSearchTool

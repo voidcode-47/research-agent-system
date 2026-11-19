@@ -3,12 +3,11 @@
 import io
 import json
 import os
-import sys
+import threading
+import time
 from urllib.parse import unquote
 
 import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import server
 import api.paper as api_paper
@@ -101,7 +100,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "PAPER_DATA_DIR", str(tmp_path / "papers"))
     monkeypatch.setattr(settings, "DAILY_QUOTA", 100)
     monkeypatch.setattr(quota, "QUOTA_PATH", str(tmp_path / "quota.json"))
-    monkeypatch.setattr(api_paper, "_spawn", lambda fn, *a: fn(*a))
+    monkeypatch.setattr(api_paper, "_spawn", lambda tid, fn, *a: fn(*a))
     fake = _FakeLLM()
     monkeypatch.setattr(api_paper, "_create_llm", lambda: fake)
     api_paper.PAPER_TASKS.clear()
@@ -171,6 +170,56 @@ def _body_pid(paper_id):
     body = [p for p in data["paragraphs"] if p["type"] == "body" and len(p["text"]) <= 800]
     assert body
     return body[0]["id"]
+
+
+def test_apply_marks_previous_diagnosis_stale(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    store.save_analysis(pid, "level", {
+        "score": 80, "summary": "旧版诊断", "stale": False,
+    })
+    meta = store.load_meta(pid)
+    store.save_meta(pid, {**meta, "status": "analyzed"})
+
+    response = client.post(f"/api/paper/{pid}/apply", json={
+        "paragraph_id": _body_pid(pid), "revised": "已修改的正文。",
+    })
+
+    assert response.status_code == 200
+    assert store.load_analysis(pid, "level")["stale"] is True
+    detail = client.get(f"/api/paper/{pid}").json()
+    assert detail["analyzed"]["level"] is False
+    assert detail["total_score"] is None
+    assert detail["status"] == "confirmed"
+
+
+@pytest.mark.parametrize("task", ["ask", "diagnose"])
+def test_tasks_use_adopted_paragraphs_and_preserve_original(env, tmp_path, task):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    paragraph_id = _body_pid(pid)
+    original = next(p["text"] for p in store.load_parsed(pid)["paragraphs"]
+                    if p["id"] == paragraph_id)
+    revised = "修订后的研究通过公开样本比较三类测试方法，并报告误差。"
+    applied = client.post(f"/api/paper/{pid}/apply", json={
+        "paragraph_id": paragraph_id, "revised": revised,
+    })
+    assert applied.status_code == 200
+
+    if task == "ask":
+        response = client.post(f"/api/paper/{pid}/ask", json={"question": "论文用了什么方法？"})
+    else:
+        response = client.post(f"/api/paper/{pid}/diagnose", json={"dimensions": ["level"]})
+
+    assert response.status_code == 200
+    assert env.calls
+    context = env.calls[-1][-1]["content"]
+    assert revised in context
+    assert original not in context
+    assert next(p["text"] for p in store.load_parsed(pid)["paragraphs"]
+                if p["id"] == paragraph_id) == original
+    assert next(p["text"] for p in store.load_version(pid, 0)["paragraphs"]
+                if p["id"] == paragraph_id) == original
 
 
 # ---------- 基础 ----------
@@ -365,6 +414,83 @@ def test_diagnose_partial_dimensions(env, tmp_path):
     assert isinstance(st["report"]["total_score"], float)
 
 
+def test_diagnosis_result_is_discarded_if_paper_changes_during_analysis(
+        env, tmp_path, monkeypatch):
+    from paper import analysis
+
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_diagnosis(*_args):
+        entered.set()
+        assert release.wait(5)
+        return {"dimension": "level", "score": 91, "stale": False}
+
+    monkeypatch.setitem(analysis._HANDLERS, "level", slow_diagnosis)
+    outcomes = {}
+
+    def run_diagnosis():
+        try:
+            outcomes["report"] = analysis.diagnose(pid, env, ["level"])
+        except Exception as exc:
+            outcomes["error"] = exc
+
+    worker = threading.Thread(target=run_diagnosis)
+    worker.start()
+    assert entered.wait(5)
+    paragraphs = store.current_paragraphs(pid)
+    paragraphs[0]["text"] += " 修改"
+    store.save_version(pid, paragraphs, note="并发修改")
+    store.mark_analysis_stale(pid)
+    release.set()
+    worker.join(5)
+
+    assert not worker.is_alive()
+    assert isinstance(outcomes.get("error"), analysis.DiagnosisStale)
+    assert store.load_analysis(pid, "level") is None
+    assert store.load_meta(pid)["status"] == "confirmed"
+
+
+def test_delete_cancels_running_diagnosis_without_recreating_paper(
+        env, tmp_path, monkeypatch):
+    from paper import analysis
+
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    entered = threading.Event()
+    release = threading.Event()
+
+    def slow_diagnosis(*_args):
+        entered.set()
+        assert release.wait(5)
+        return {"dimension": "level", "score": 91, "stale": False}
+
+    monkeypatch.setitem(analysis._HANDLERS, "level", slow_diagnosis)
+    task_id = api_paper._new_task("diagnose", pid, "delete-race")
+    task = api_paper.PAPER_TASKS[task_id]
+    task["status"] = "running"
+    outcomes = {}
+
+    def run_worker():
+        api_paper._diagnose_worker(task_id, pid, ["level"])
+        outcomes["status"] = task["status"]
+
+    worker = threading.Thread(target=run_worker)
+    worker.start()
+    assert entered.wait(5)
+    response = client.delete(f"/api/paper/{pid}")
+    release.set()
+    worker.join(5)
+
+    assert response.status_code == 200
+    assert not worker.is_alive()
+    assert outcomes["status"] == "cancelled"
+    assert not os.path.exists(store.paper_dir(pid))
+    assert client.get("/api/paper").json()["papers"] == []
+
+
 def test_diagnose_unknown_dimension(env, tmp_path):
     pid = _upload_ok(tmp_path)
     _confirm(pid)
@@ -413,6 +539,115 @@ def test_cancel_finished_task_is_noop(env, tmp_path):
 def test_cancel_unknown_task_404(env, tmp_path):
     pid = _upload_ok(tmp_path)
     assert client.post(f"/api/paper/{pid}/diagnose/nope/cancel").status_code == 404
+
+
+def _capture_spawn(monkeypatch):
+    captured = []
+
+    def spawn(task_id, fn, *args):
+        captured.append((task_id, fn, args))
+
+    monkeypatch.setattr(api_paper, "_spawn", spawn)
+    return captured
+
+
+def test_duplicate_rewrite_reuses_active_task(env, tmp_path, monkeypatch):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    captured = _capture_spawn(monkeypatch)
+    body = {"paragraph_id": _body_pid(pid), "mode": "deai",
+            "instruction": "只润色，不改结构"}
+
+    first = client.post(f"/api/paper/{pid}/rewrite", json=body)
+    second = client.post(f"/api/paper/{pid}/rewrite", json=body)
+
+    assert first.status_code == 200 and second.status_code == 200
+    assert first.json()["task_id"] == second.json()["task_id"]
+    assert len(captured) == 1
+    status = client.get(
+        f"/api/paper/{pid}/rewrite/{first.json()['task_id']}").json()
+    assert status["status"] == "queued"
+
+
+def test_rewrite_queue_limit_returns_429(env, tmp_path, monkeypatch):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    captured = _capture_spawn(monkeypatch)
+    monkeypatch.setattr(api_paper, "MAX_ACTIVE_TASKS", 1)
+    para = _body_pid(pid)
+
+    first = client.post(f"/api/paper/{pid}/rewrite", json={
+        "paragraph_id": para, "mode": "deai", "instruction": "第一种要求",
+    })
+    second = client.post(f"/api/paper/{pid}/rewrite", json={
+        "paragraph_id": para, "mode": "deai", "instruction": "第二种要求",
+    })
+
+    assert first.status_code == 200
+    assert second.status_code == 429
+    assert "任务队列已满" in second.json()["detail"]
+    assert len(captured) == 1
+
+
+def test_queued_rewrite_can_be_cancelled_before_start(env, tmp_path, monkeypatch):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    captured = _capture_spawn(monkeypatch)
+
+    created = client.post(f"/api/paper/{pid}/rewrite", json={
+        "paragraph_id": _body_pid(pid), "mode": "deai", "instruction": "排队后取消",
+    }).json()
+    task_id = created["task_id"]
+    assert client.get(f"/api/paper/{pid}/rewrite/{task_id}").json()["status"] == "queued"
+
+    cancelled = client.post(f"/api/paper/{pid}/rewrite/{task_id}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert cancelled.json()["cancel_requested"] is True
+    assert client.get(
+        f"/api/paper/{pid}/rewrite/{task_id}").json()["status"] == "cancelled"
+    assert len(captured) == 1
+
+
+def test_upload_runs_through_real_task_scheduler(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "PAPER_DATA_DIR", str(tmp_path / "papers"))
+    monkeypatch.setattr(quota, "QUOTA_PATH", str(tmp_path / "quota.json"))
+    api_paper.PAPER_TASKS.clear()
+    try:
+        source = _make_pdf(tmp_path / "queued-run.pdf")
+        with open(source, "rb") as f:
+            created = client.post("/api/paper/upload", files={
+                "file": ("queued-run.pdf", f, "application/pdf"),
+            }).json()
+        deadline = time.time() + 15
+        status = {}
+        while time.time() < deadline:
+            status = client.get(
+                f"/api/paper/upload/{created['task_id']}").json()
+            if status["status"] in ("done", "error", "cancelled"):
+                break
+            time.sleep(0.05)
+        assert status.get("status") == "done", status
+        assert client.get(f"/api/paper/{created['paper_id']}").status_code == 200
+    finally:
+        api_paper.PAPER_TASKS.clear()
+
+
+def test_queued_upload_cancel_removes_partial_paper(env, tmp_path, monkeypatch):
+    _capture_spawn(monkeypatch)
+    source = _make_pdf(tmp_path / "queued.pdf")
+    with open(source, "rb") as f:
+        created = client.post("/api/paper/upload", files={
+            "file": ("queued.pdf", f, "application/pdf"),
+        }).json()
+    pid = created["paper_id"]
+    assert os.path.isdir(store.paper_dir(pid))
+
+    cancelled = client.post(f"/api/paper/upload/{created['task_id']}/cancel")
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+    assert not os.path.exists(store.paper_dir(pid))
+    assert client.get(f"/api/paper/{pid}").status_code == 404
 
 
 def test_legacy_deai_analysis_marked_stale(env, tmp_path):
@@ -561,6 +796,184 @@ def test_apply_rejects_empty_and_missing(env, tmp_path):
                        json={"paragraph_id": pid_body, "revised": "  "}).status_code == 400
     assert client.post(f"/api/paper/{pid}/apply",
                        json={"paragraph_id": "p_9999", "revised": "文本"}).status_code == 404
+
+
+def test_apply_with_matching_source_tokens_succeeds(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    result = _rewrite_result(pid, {"paragraph_id": _body_pid(pid), "mode": "deai"})
+    assert result["source_version"] == 0
+
+    applied = client.post(f"/api/paper/{pid}/apply", json={
+        "paragraph_id": result["paragraph_id"],
+        "revised": result["revised"],
+        "expected_version": result["source_version"],
+        "expected_original": result["original"],
+    })
+    assert applied.status_code == 200
+    assert applied.json()["version"] == 1
+
+
+def test_stale_paragraph_change_rejects_adoption(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    pid_body = _body_pid(pid)
+    result = _rewrite_result(pid, {"paragraph_id": pid_body, "mode": "deai"})
+
+    paragraphs = store.current_paragraphs(pid)
+    next(p for p in paragraphs if p["id"] == pid_body)["text"] = "该段已被手工修改。"
+    store.save_version(pid, paragraphs, "手工修改")
+
+    response = client.post(f"/api/paper/{pid}/apply", json={
+        "paragraph_id": pid_body,
+        "revised": result["revised"],
+        "expected_version": result["source_version"],
+        "expected_original": result["original"],
+    })
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["conflict"] is True
+    assert body["reason"] == "paragraph_changed"
+    assert body["current_version"] == 1
+    assert body["expected_version"] == 0
+    current = next(p for p in store.current_paragraphs(pid) if p["id"] == pid_body)
+    assert current["text"] == "该段已被手工修改。"
+
+
+def test_version_only_conflict_rejects_adoption(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    pid_body = _body_pid(pid)
+    result = _rewrite_result(pid, {"paragraph_id": pid_body, "mode": "deai"})
+    store.save_version(pid, store.current_paragraphs(pid), "其他修改")
+
+    response = client.post(f"/api/paper/{pid}/apply", json={
+        "paragraph_id": pid_body,
+        "revised": result["revised"],
+        "expected_version": result["source_version"],
+    })
+
+    assert response.status_code == 409
+    assert response.json()["reason"] == "version_changed"
+
+
+def test_batch_results_share_snapshot_and_apply_sequentially(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    data = client.get(f"/api/paper/{pid}/paragraphs").json()
+    ids = [p["id"] for p in data["paragraphs"]
+           if p["type"] == "body" and len(p["text"]) <= 800][:2]
+    assert len(ids) == 2
+
+    started = client.post(f"/api/paper/{pid}/rewrite/batch",
+                          json={"paragraph_ids": ids, "mode": "deai"})
+    report = client.get(
+        f"/api/paper/{pid}/rewrite/{started.json()['task_id']}").json()["report"]
+    items = {item["paragraph_id"]: item for item in report["items"]}
+    assert set(items) == set(ids)
+    assert all(item["source_version"] == 0 for item in items.values())
+
+    # 第一次采纳把论文升到 v1；第二段正文未变，仍可按各自原文采纳为 v2
+    for expected_version, paragraph_id in enumerate(ids, start=1):
+        item = items[paragraph_id]
+        applied = client.post(f"/api/paper/{pid}/apply", json={
+            "paragraph_id": paragraph_id,
+            "revised": item["revised"],
+            "expected_version": item["source_version"],
+            "expected_original": item["original"],
+        })
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["version"] == expected_version
+
+    final = {p["id"]: p["text"] for p in store.current_paragraphs(pid)}
+    assert all(final[paragraph_id] == items[paragraph_id]["revised"] for paragraph_id in ids)
+    assert store.current_version(pid) == 2
+
+
+def test_batch_apply_saves_all_paragraphs_in_one_version(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    data = client.get(f"/api/paper/{pid}/paragraphs").json()
+    paragraphs = [p for p in data["paragraphs"]
+                  if p["type"] == "body" and len(p["text"]) <= 800][:2]
+    assert len(paragraphs) == 2
+    items = [{
+        "paragraph_id": p["id"],
+        "revised": f"原子批量采纳后的第 {idx} 段正文。",
+        "expected_version": 0,
+        "expected_original": p["text"],
+    } for idx, p in enumerate(paragraphs, start=1)]
+
+    response = client.post(f"/api/paper/{pid}/apply-batch", json={"items": items})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["version"] == 1
+    assert set(body["paragraph_ids"]) == {p["id"] for p in paragraphs}
+    current = {p["id"]: p["text"] for p in store.current_paragraphs(pid)}
+    assert all(current[item["paragraph_id"]] == item["revised"] for item in items)
+    assert store.current_version(pid) == 1
+    assert len(store.list_versions(pid)) == 2
+
+
+def test_batch_apply_conflict_saves_nothing(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    data = client.get(f"/api/paper/{pid}/paragraphs").json()
+    paragraphs = [p for p in data["paragraphs"]
+                  if p["type"] == "body" and len(p["text"]) <= 800][:2]
+    assert len(paragraphs) == 2
+    items = [
+        {
+            "paragraph_id": paragraphs[0]["id"],
+            "revised": "第一段本可保存。",
+            "expected_version": 0,
+            "expected_original": paragraphs[0]["text"],
+        },
+        {
+            "paragraph_id": paragraphs[1]["id"],
+            "revised": "第二段基于旧正文。",
+            "expected_version": 0,
+            "expected_original": "与当前正文不一致的旧文本",
+        },
+    ]
+
+    response = client.post(f"/api/paper/{pid}/apply-batch", json={"items": items})
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["reason"] == "paragraph_changed"
+    assert paragraphs[1]["id"] in body["detail"]
+    current = {p["id"]: p["text"] for p in store.current_paragraphs(pid)}
+    assert current[paragraphs[0]["id"]] == paragraphs[0]["text"]
+    assert current[paragraphs[1]["id"]] == paragraphs[1]["text"]
+    assert store.current_version(pid) == 0
+
+
+@pytest.mark.parametrize("payload", [
+    {"items": []},
+    {"items": [
+        {"paragraph_id": "p_0001", "revised": "一"},
+        {"paragraph_id": "p_0001", "revised": "二"},
+    ]},
+])
+def test_batch_apply_rejects_empty_or_duplicate(env, tmp_path, payload):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    response = client.post(f"/api/paper/{pid}/apply-batch", json=payload)
+    assert response.status_code == 400
+    assert store.current_version(pid) == 0
+
+
+def test_batch_apply_rejects_unknown_paragraph(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    response = client.post(f"/api/paper/{pid}/apply-batch", json={"items": [
+        {"paragraph_id": "p_9999", "revised": "不存在的段落"},
+    ]})
+    assert response.status_code == 404
+    assert store.current_version(pid) == 0
 
 
 # ---------- 全局改写方针 ----------
@@ -721,6 +1134,29 @@ def test_ask_and_rejection(env, tmp_path):
 
 
 # ---------- 配额 ----------
+def test_batch_rewrite_preflight_rejects_before_task(env, tmp_path, monkeypatch):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    data = client.get(f"/api/paper/{pid}/paragraphs").json()
+    ids = [p["id"] for p in data["paragraphs"]
+           if p["type"] == "body" and len(p["text"]) <= 800][:2]
+    assert len(ids) == 2
+    monkeypatch.setattr(settings, "DAILY_QUOTA", 1)
+    calls_before = len(env.calls)
+
+    r = client.post(f"/api/paper/{pid}/rewrite/batch",
+                    json={"paragraph_ids": ids, "mode": "deai"})
+
+    assert r.status_code == 429, r.text
+    detail = r.json()["detail"]
+    assert "需要 2 次模型调用" in detail
+    assert "仅剩 1 次" in detail
+    assert not any(t.get("kind") == "rewrite_batch"
+                   for t in api_paper.PAPER_TASKS.values())
+    assert len(env.calls) == calls_before
+    assert quota.usage_snapshot()["used"] == 0
+
+
 def test_quota_exceeded_returns_429(env, tmp_path, monkeypatch):
     pid = _upload_ok(tmp_path)
     _confirm(pid)
@@ -746,6 +1182,29 @@ def test_delete_paper(env, tmp_path):
     assert r.status_code == 200
     assert client.get(f"/api/paper/{pid}").status_code == 404
     assert client.get("/api/paper").json()["papers"] == []
+
+
+def test_new_task_rejected_while_paper_is_deleting(env, tmp_path):
+    pid = _upload_ok(tmp_path)
+    _confirm(pid)
+    existing = api_paper._new_task("diagnose", pid, "diagnose:level")
+    api_paper._DELETING_PAPERS.add(pid)
+    try:
+        response = client.post(
+            f"/api/paper/{pid}/diagnose",
+            json={"dimensions": ["level"]},
+        )
+    finally:
+        api_paper._DELETING_PAPERS.discard(pid)
+        api_paper.PAPER_TASKS.pop(existing, None)
+
+    assert response.status_code == 404
+    assert "正在删除" in response.json()["detail"]
+    assert not any(
+        task.get("paper_id") == pid
+        and task.get("status") not in api_paper._TERMINAL
+        for task in api_paper.PAPER_TASKS.values()
+    )
 
 
 # ---------- 模型选择 ----------

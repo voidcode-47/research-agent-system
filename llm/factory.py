@@ -10,7 +10,7 @@ import re
 from typing import Optional
 
 from config.settings import settings
-from config.llm_config import PROVIDER_CONFIG, get_provider_config
+from config.llm_config import get_provider_config
 from llm.base import BaseLLM
 from utils.logger import get_logger
 
@@ -18,12 +18,8 @@ logger = get_logger(__name__)
 
 # LLM 实例缓存：同一 provider+model 复用客户端，避免每次对话重复创建
 # 与重复触发本地模型自动发现（/v1/models）。仅在模型名确定时缓存；
-# 修改 .env 后按设置页提示重启应用即可生效。
+# 复用前核对有效 URL/Key，设置页修改配置后立即生效。临时连接不参与缓存。
 _llm_cache: dict[tuple[str, str], "BaseLLM"] = {}
-
-
-def _cache_key(provider: str, model: str) -> tuple[str, str]:
-    return (provider, model)
 
 
 def normalize_base_url(url: str) -> str:
@@ -83,64 +79,12 @@ class LLMFactory:
         else:
             chosen_model = config["default_model"]
 
-        # 命中缓存则复用（仅模型名确定时；custom 不缓存——URL/Key 可能随时变）
-        key = _cache_key(provider, chosen_model)
-        if provider != "custom" and chosen_model and key in _llm_cache:
-            return _llm_cache[key]
-
-        # 延迟导入，避免首屏加载 openai（约 2.4s）
-        from llm.openai_llm import OpenAICompatibleLLM
-
-        def _cloud_base_url(default_url: str) -> str:
-            """云提供商 Base URL：临时参数 > .env 覆盖 > 官方默认。"""
-            if base_url and base_url.strip():
-                return normalize_base_url(base_url)
-            env_base = getattr(settings, f"{provider.upper()}_BASE_URL", "")
-            return normalize_base_url(env_base or default_url)
-
-        if provider == "zhipu":
-            llm = OpenAICompatibleLLM(
-                api_key=api_key or settings.ZHIPU_API_KEY,
-                base_url=_cloud_base_url(config["base_url"]),
-                model=chosen_model,
-                provider=provider,
-            )
-        elif provider == "qwen":
-            llm = OpenAICompatibleLLM(
-                api_key=api_key or settings.DASHSCOPE_API_KEY,
-                base_url=_cloud_base_url(config["base_url"]),
-                model=chosen_model,
-                provider=provider,
-            )
-        elif provider == "deepseek":
-            llm = OpenAICompatibleLLM(
-                api_key=api_key or settings.DEEPSEEK_API_KEY,
-                base_url=_cloud_base_url(config["base_url"]),
-                model=chosen_model,
-                provider=provider,
-            )
-        elif provider == "ollama":
-            llm = OpenAICompatibleLLM(
-                api_key="ollama",
-                base_url=settings.OLLAMA_BASE_URL.rstrip("/") + "/v1",
-                model=chosen_model or settings.OLLAMA_MODEL,
-                provider=provider,
-                is_local=True,
-            )
-        elif provider == "lmstudio":
-            llm = OpenAICompatibleLLM(
-                api_key="lm-studio",
-                base_url=settings.LMSTUDIO_BASE_URL.rstrip("/") + "/v1",
-                model=chosen_model,  # 空串时构造函数自动发现已加载模型
-                provider=provider,
-                is_local=True,
-            )
-        elif provider == "custom":
-            # 自定义 OpenAI 兼容 API：URL/Key/模型名由用户运行时填写
-            base_url = normalize_base_url(
-                (base_url or "").strip() or settings.CUSTOM_API_BASE_URL
-            )
-            if not base_url:
+        override_key = (api_key or "").strip()
+        override_url = (base_url or "").strip()
+        if provider == "custom":
+            effective_url = normalize_base_url(override_url or settings.CUSTOM_API_BASE_URL)
+            effective_key = override_key or settings.CUSTOM_API_KEY or "local"
+            if not effective_url:
                 raise ValueError(
                     "自定义 API 未配置 Base URL。请在侧边栏选择「自定义 API」后填写。"
                 )
@@ -148,51 +92,37 @@ class LLMFactory:
                 raise ValueError(
                     "自定义 API 未配置模型名。请在侧边栏「模型」处填写。"
                 )
-            llm = OpenAICompatibleLLM(
-                api_key=(api_key or "").strip() or settings.CUSTOM_API_KEY or "local",
-                base_url=base_url,
-                model=chosen_model,
-                provider=provider,
+        elif is_local:
+            effective_url = normalize_base_url(
+                override_url or getattr(settings, f"{provider.upper()}_BASE_URL")
             )
+            effective_key = override_key or ("ollama" if provider == "ollama" else "lm-studio")
         else:
-            raise ValueError(f"未知提供商: {provider}")
+            effective_url = normalize_base_url(
+                override_url or getattr(settings, config["env_base_url"]) or config["base_url"]
+            )
+            effective_key = override_key or getattr(settings, config["env_key"]) or "local"
 
-        # 仅缓存模型名确定的实例（custom 不缓存，避免 Key/URL 变更后仍连旧地址）
-        if chosen_model and provider != "custom":
+        key = (provider, chosen_model)
+        cacheable = bool(chosen_model) and provider != "custom" and not (override_key or override_url)
+        cached = _llm_cache.get(key) if cacheable else None
+        if cached and cached.base_url == effective_url and cached.api_key == effective_key:
+            return cached
+
+        # 延迟导入，避免首屏加载 openai（约 2.4s）
+        from llm.openai_llm import OpenAICompatibleLLM
+
+        llm = OpenAICompatibleLLM(
+            api_key=effective_key,
+            base_url=effective_url,
+            model=chosen_model,
+            provider=provider,
+            is_local=is_local,
+        )
+
+        if cacheable:
             _llm_cache[key] = llm
         return llm
-
-    @staticmethod
-    def list_available() -> list[str]:
-        """返回 ping 成功的提供商列表，供 UI 下拉。
-
-        只有配置了 API Key 的提供商才会被检测。
-        Ollama/LM Studio 无需 key，直接探测本地端口。
-        """
-        available = []
-        for provider, config in PROVIDER_CONFIG.items():
-            env_key = config.get("env_key")
-            if env_key is None:
-                # 本地服务：直接探测
-                try:
-                    llm = LLMFactory.create(provider)
-                    if llm.ping():
-                        available.append(provider)
-                except Exception:
-                    pass
-                continue
-
-            # 云端：必须配置 key
-            key_value = getattr(settings, env_key, "")
-            if not key_value:
-                continue
-            try:
-                llm = LLMFactory.create(provider)
-                if llm.ping():
-                    available.append(provider)
-            except Exception as e:
-                logger.debug(f"{provider} ping 失败: {e}")
-        return available
 
     @staticmethod
     def get_models(provider: str) -> list[str]:

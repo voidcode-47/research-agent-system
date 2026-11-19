@@ -176,7 +176,6 @@ def _extract_keywords(paragraphs: list[dict]) -> list[str]:
 
 
 def _extract_abstract(sections: list[dict], paragraphs: list[dict], full_text: str) -> str:
-    by_section = {s["id"]: s for s in sections}
     para_map = {p["id"]: p for p in paragraphs}
     for s in sections:
         title = (s.get("title") or "").lower().replace(" ", "")

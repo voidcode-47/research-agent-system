@@ -1,12 +1,8 @@
 # -*- coding: utf-8 -*-
 """管理员认证、模型权限与配额豁免测试。"""
-import os
-import sys
 import threading
 
 import pytest
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import server
 from config.settings import settings

@@ -8,10 +8,6 @@ from io import BytesIO
 
 import re
 
-from utils.logger import get_logger
-
-logger = get_logger(__name__)
-
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")
 
@@ -43,6 +39,7 @@ def md_to_docx(markdown_text: str) -> BytesIO:
         BytesIO 内存中的 docx 文件
     """
     from docx import Document
+    from docx.oxml.ns import qn
     from docx.shared import Pt
 
     doc = Document()
@@ -52,7 +49,7 @@ def md_to_docx(markdown_text: str) -> BytesIO:
     style.font.size = Pt(10.5)
     try:
         style.element.rPr.rFonts.set(
-            _docx_oxml_ns_qn("w:eastAsia"), "Microsoft YaHei"
+            qn("w:eastAsia"), "Microsoft YaHei"
         )
     except Exception:
         pass
@@ -115,9 +112,3 @@ def md_to_docx(markdown_text: str) -> BytesIO:
     doc.save(buf)
     buf.seek(0)
     return buf
-
-
-def _docx_oxml_ns_qn(name: str):
-    """docx oxml 命名空间（延迟导入，避免未安装时模块不可用）。"""
-    from docx.oxml.ns import qn
-    return qn(name)

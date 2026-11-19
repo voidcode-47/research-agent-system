@@ -11,6 +11,17 @@ from config.paper import DEFAULT_FORMAT, DIAGNOSIS_DIMENSIONS
 from paper import store
 
 
+def _save_export(paper_id: str, filename: str, buf: BytesIO) -> None:
+    """尽力保存导出副本；磁盘不可写时仍可下载内存中的结果。"""
+    try:
+        out_dir = os.path.join(store.paper_dir(paper_id), "exports")
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, filename), "wb") as f:
+            f.write(buf.getvalue())
+    except (OSError, ValueError):
+        pass
+
+
 def _set_run_font(run, font_name: str, size_pt: float, bold: bool = False) -> None:
     from docx.oxml.ns import qn
     from docx.shared import Pt
@@ -83,16 +94,7 @@ def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None)
     doc.save(buf)
     buf.seek(0)
 
-    # 同步落一份 exports/optimized.docx
-    try:
-        out_dir = os.path.join(store.paper_dir(paper_id), "exports")
-        os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, "optimized.docx"), "wb") as f:
-            f.write(buf.getvalue())
-        buf.seek(0)
-    except (OSError, ValueError):
-        pass
-
+    _save_export(paper_id, "optimized.docx", buf)
     return buf
 
 
@@ -223,15 +225,7 @@ def export_pdf(paper_id: str, paragraphs: list[dict], requirement: dict | None) 
     doc.build(story or [Spacer(1, 1)])
     buf.seek(0)
 
-    try:
-        out_dir = os.path.join(store.paper_dir(paper_id), "exports")
-        os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, "optimized.pdf"), "wb") as f:
-            f.write(buf.getvalue())
-        buf.seek(0)
-    except (OSError, ValueError):
-        pass
-
+    _save_export(paper_id, "optimized.pdf", buf)
     return buf
 
 
@@ -362,12 +356,5 @@ def export_summary_docx(paper_id: str, meta: dict, parsed: dict,
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
-    try:
-        out_dir = os.path.join(store.paper_dir(paper_id), "exports")
-        os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, "modification_summary.docx"), "wb") as f:
-            f.write(buf.getvalue())
-        buf.seek(0)
-    except (OSError, ValueError):
-        pass
+    _save_export(paper_id, "modification_summary.docx", buf)
     return buf

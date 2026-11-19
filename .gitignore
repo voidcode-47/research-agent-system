@@ -37,7 +37,11 @@ ENV/
 
 # Test / cache
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.hypothesis/
 .coverage
+coverage.xml
 htmlcov/
 
 # Runtime data (user papers, generated reports, local prefs)
@@ -48,14 +52,38 @@ data/ui_prefs.json
 data/admin.json
 data/admin_credentials.txt
 data/admin_sessions.json
+data/*.lock
+data/*.tmp
+data/*.bak
+data/*.journal.json
+data/tmp/
+data/backups/
 
 # Logs
 *.log
 logs/
+*.pid
+*.sqlite
+*.sqlite3
+*.db
 
 # OS
 .DS_Store
 Thumbs.db
+*.swp
+*.swo
+*.orig
+*.rej
+*.tmp
+*.bak
+*.zip
+*.tar
+*.tar.gz
+node_modules/
+npm-debug.log*
+
+# Local maintenance reports
+CLEANUP_REPORT.md
 
 # Trae
 .trae/

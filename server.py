@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from config.settings import settings
 from config.llm_config import PROVIDER_CONFIG, list_providers
 from llm.factory import LLMFactory
-from utils import auth
+from utils import auth, frontend_assets, runtime_lock
 from utils.logger import get_logger
 from utils.prefs import load_prefs, save_prefs
 from utils.env_file import update_env
@@ -39,7 +39,32 @@ app = FastAPI(title="论文诊断与优化工作台", version="3.0.0")
 
 @app.on_event("startup")
 def _ensure_admin_account():
-    auth.ensure_admin()
+    from api import paper as paper_api
+    from paper import store as paper_store
+
+    lock_path = os.path.join(paper_store.ensure_root(), "_server.lock")
+    if not runtime_lock.acquire(lock_path):
+        raise RuntimeError(
+            "检测到另一个服务实例正在使用同一论文数据目录；"
+            "请先停止该实例，或为其配置不同的 PAPER_DATA_DIR"
+        )
+    try:
+        auth.ensure_admin()
+        paper_api.restore_task_journal()
+        stale = frontend_assets.verify(_WEB_DIR)
+        if stale:
+            logger.warning(
+                "前端资源版本已过期：%s；请运行 python scripts/build_frontend.py",
+                ", ".join(stale),
+            )
+    except Exception:
+        runtime_lock.release()
+        raise
+
+
+@app.on_event("shutdown")
+def _release_runtime_lock():
+    runtime_lock.release()
 
 
 @app.middleware("http")
@@ -84,9 +109,8 @@ MAX_RESEARCH_TASKS = 200
 # 云提供商 → (.env 的 API Key 变量, .env 的 Base URL 变量, 官方默认 Base URL)
 # 用于前端填写/保存各云厂商的 Key 与 URL（key 不再内置在项目文件里）
 CLOUD_ENV_MAP: dict[str, tuple[str, str, str]] = {
-    "deepseek": ("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1"),
-    "zhipu": ("ZHIPU_API_KEY", "ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4"),
-    "qwen": ("DASHSCOPE_API_KEY", "DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+    provider: (config["env_key"], config["env_base_url"], config["base_url"])
+    for provider, config in PROVIDER_CONFIG.items() if config.get("env_key")
 }
 
 

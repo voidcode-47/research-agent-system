@@ -3,7 +3,7 @@
 定义统一接口，用注册表模式自动发现可用工具。
 """
 from abc import ABC, abstractmethod
-from typing import Any, Optional
+from typing import Optional
 
 from utils.logger import get_logger
 

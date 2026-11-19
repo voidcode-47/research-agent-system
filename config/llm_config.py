@@ -9,6 +9,7 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "supports_tools": True,
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "env_key": "ZHIPU_API_KEY",
+        "env_base_url": "ZHIPU_BASE_URL",
     },
     "qwen": {
         "label": "通义千问",
@@ -18,6 +19,7 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "supports_tools": True,
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "env_key": "DASHSCOPE_API_KEY",
+        "env_base_url": "DASHSCOPE_BASE_URL",
     },
     "deepseek": {
         "label": "DeepSeek",
@@ -27,6 +29,7 @@ PROVIDER_CONFIG: dict[str, dict] = {
         "supports_tools": True,
         "base_url": "https://api.deepseek.com/v1",
         "env_key": "DEEPSEEK_API_KEY",
+        "env_base_url": "DEEPSEEK_BASE_URL",
     },
     "custom": {
         "label": "自定义 API (OpenAI 兼容)",

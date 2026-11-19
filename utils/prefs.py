@@ -29,7 +29,19 @@ def load_prefs() -> dict:
         with open(PREFS_PATH, encoding="utf-8") as f:
             data = json.load(f)
         result = copy.deepcopy(_DEFAULTS)
-        result.update({k: v for k, v in data.items() if k in _DEFAULTS})
+        if not isinstance(data, dict):
+            return result
+        for key, default in _DEFAULTS.items():
+            value = data.get(key)
+            if type(value) is not type(default):
+                continue
+            if key == "research":
+                result[key].update({
+                    k: v for k, v in value.items()
+                    if k in default and type(v) is type(default[k])
+                })
+            else:
+                result[key] = value
         return result
     except (OSError, json.JSONDecodeError):
         return copy.deepcopy(_DEFAULTS)
@@ -39,16 +51,16 @@ def save_prefs(provider: str, model: str, custom_models: dict | None = None,
                research: dict | None = None) -> None:
     """保存 UI 偏好（幂等，仅配置变化时调用）。"""
     try:
-        os.makedirs(_PREFS_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(PREFS_PATH)), exist_ok=True)
         current = load_prefs()
         current["provider"] = provider
         current["model"] = model
         if custom_models is not None:
             current["custom_models"] = dict(custom_models)
         if research is not None:
-            merged = dict(_DEFAULTS["research"])
-            merged.update({k: v for k, v in research.items() if k in merged})
-            current["research"] = merged
+            current["research"].update({
+                k: v for k, v in research.items() if k in _DEFAULTS["research"]
+            })
         with open(PREFS_PATH, "w", encoding="utf-8") as f:
             json.dump(current, f, ensure_ascii=False, indent=2)
     except Exception as e:

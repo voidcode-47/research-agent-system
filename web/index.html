@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<link rel="stylesheet" href="/style.css?v=2.8.3">
+<link rel="stylesheet" href="/style.css?v=dafe40e08049">
 </head>
 <body>
 <div class="layout">
@@ -55,11 +55,16 @@
           <p class="view-sub">上传 PDF / Word → 需求确认 → 四维诊断 → 相似论文 → 段落改写 → 导出 Word / PDF。只做诊断、建议与局部改写，不代写整篇论文。</p>
         </div>
         <div class="toolbar">
+          <input type="search" id="paper-search" class="input paper-search-input" placeholder="搜索标题或文件名" autocomplete="off" aria-label="搜索论文">
           <select id="paper-select" class="input" title="历史论文">
             <option value="">选择论文...</option>
           </select>
+          <button id="btn-paper-more" class="btn btn-ghost hidden" title="加载更多论文">更多</button>
+          <span id="paper-list-count" class="paper-list-count"></span>
           <button id="btn-paper-refresh" class="btn btn-ghost">刷新</button>
           <button id="btn-paper-new" class="btn btn-ghost">新建</button>
+          <button id="btn-paper-restore" class="btn btn-ghost">恢复备份</button>
+          <input type="file" id="paper-restore-file" accept=".zip,application/zip" hidden>
           <button id="btn-paper-delete" class="btn btn-ghost">删除</button>
         </div>
       </div>
@@ -202,9 +207,12 @@
               <button id="btn-paper-export" class="btn btn-ghost">导出 Word</button>
               <button id="btn-paper-export-pdf" class="btn btn-ghost">导出 PDF</button>
               <button id="btn-paper-export-summary" class="btn btn-ghost">导出修改说明</button>
+              <button id="btn-paper-backup" class="btn btn-ghost">备份数据</button>
+              <button id="btn-paper-cleanup" class="btn btn-ghost">整理旧版本</button>
             </div>
             <div class="paper-batch-bar">
               <button id="btn-paper-batch" class="btn btn-primary" disabled>批量改写选中（0）</button>
+              <button id="btn-paper-batch-adopt" class="btn btn-ghost hidden">全部采纳成功段（0）</button>
               <button id="btn-paper-batch-clear" class="btn btn-ghost">清空选择</button>
             </div>
             <div class="paper-task-progress hidden" id="paper-batch-progress">
@@ -460,7 +468,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=3.1.0"></script>
-<script src="/paper.js?v=1.9.6"></script>
+<script src="/app.js?v=5d1b8e4e9389"></script>
+<script src="/paper.js?v=a70038cb4845"></script>
 </body>
 </html>

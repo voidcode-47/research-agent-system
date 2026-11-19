@@ -221,7 +221,7 @@ def generate_guideline(llm, parsed: dict, requirement: dict | None,
 
 def rewrite_paragraph(llm, text: str, requirement: dict | None, mode: str = "deai",
                       instruction: str = "", paper_id: str = "",
-                      guideline: str = "") -> dict:
+                      guideline: str = "", version: int = 0) -> dict:
     """按全局方针改写单个段落并返回 diff；不落盘。"""
     original = (text or "").strip()
     if not original:
@@ -279,28 +279,117 @@ def rewrite_paragraph(llm, text: str, requirement: dict | None, mode: str = "dea
         "mode": mode_key,
         "guideline_used": bool(guideline),
         "paragraph_id": "",
+        "source_version": int(version or 0),
     }
 
 
-def apply_rewrite(paper_id: str, paragraph_id: str, revised: str) -> dict:
-    """把用户确认的改写写入新版本，并更新 current_version。"""
+def apply_rewrite(paper_id: str, paragraph_id: str, revised: str,
+                  expected_version: int | None = None,
+                  expected_original: str | None = None) -> dict:
+    """把用户确认的改写写入新版本，并更新 current_version。
+
+    并发令牌优先使用段落原文：只要目标段落正文未变，即使论文因其他段落
+    采纳而升级版本，仍允许采纳（批量结果可依次采纳）。未提供原文时才
+    退回整篇版本号比较。两者都未提供时保持旧行为，仅供既有客户端使用。
+    """
     text = (revised or "").strip()
     if not text:
         raise ValueError("改写内容为空，无法保存")
-    paragraphs = store.current_paragraphs(paper_id)
-    target = None
-    for p in paragraphs:
-        if p.get("id") == paragraph_id:
-            target = p
-            break
-    if target is None:
-        raise FileNotFoundError("段落不存在")
+    with store.locked():
+        current = store.current_version(paper_id)
+        paragraphs = store.current_paragraphs(paper_id)
+        target = None
+        for p in paragraphs:
+            if p.get("id") == paragraph_id:
+                target = p
+                break
+        if target is None:
+            raise FileNotFoundError("段落不存在")
 
-    target["text"] = text
-    version = store.save_version(paper_id, paragraphs, note=f"采纳改写 {paragraph_id}")
+        if expected_original is not None:
+            if (target.get("text") or "").strip() != expected_original.strip():
+                raise store.VersionConflict(
+                    "该段落已在论文中修改，改写结果基于旧正文，未保存；请重新生成后再采纳。",
+                    current_version=current,
+                    expected_version=expected_version,
+                    reason="paragraph_changed",
+                )
+        elif expected_version is not None and int(expected_version) != current:
+            raise store.VersionConflict(
+                f"论文当前为 v{current}，改写结果基于 v{expected_version}，"
+                "未保存；请重新生成后再采纳。",
+                current_version=current,
+                expected_version=int(expected_version),
+                reason="version_changed",
+            )
+
+        target["text"] = text
+        version = store.save_version(paper_id, paragraphs, note=f"采纳改写 {paragraph_id}")
+        store.mark_analysis_stale(paper_id)
     return {
         "version": version,
         "paragraph_id": paragraph_id,
         "text": text,
+        "versions": store.list_versions(paper_id),
+    }
+
+
+def apply_rewrites(paper_id: str, items: list[dict]) -> dict:
+    """原子采纳多段改写：任一段校验失败则全部不保存，只生成一个版本。"""
+    if not items:
+        raise ValueError("没有可采纳的改写内容")
+    if len(items) > 8:
+        raise ValueError("一次最多批量采纳 8 个段落")
+    with store.locked():
+        current = store.current_version(paper_id)
+        paragraphs = store.current_paragraphs(paper_id)
+        by_id = {p.get("id"): p for p in paragraphs}
+        seen: set[str] = set()
+        for item in items:
+            paragraph_id = str(item.get("paragraph_id") or "").strip()
+            if not paragraph_id:
+                raise ValueError("批量采纳缺少段落 ID")
+            if paragraph_id in seen:
+                raise ValueError(f"批量采纳包含重复段落：{paragraph_id}")
+            seen.add(paragraph_id)
+        updates: dict[str, str] = {}
+        for item in items:
+            paragraph_id = str(item.get("paragraph_id") or "").strip()
+            text = str(item.get("revised") or "").strip()
+            if not text:
+                raise ValueError(f"段落 {paragraph_id} 的改写内容为空")
+            target = by_id.get(paragraph_id)
+            if target is None:
+                raise FileNotFoundError(f"段落不存在：{paragraph_id}")
+            expected_original = item.get("expected_original")
+            expected_version = item.get("expected_version")
+            if expected_original is not None:
+                if (target.get("text") or "").strip() != str(expected_original).strip():
+                    raise store.VersionConflict(
+                        f"段落 {paragraph_id} 已在论文中修改，批量改写结果基于旧正文，"
+                        "全部未保存；请重新生成后再采纳。",
+                        current_version=current,
+                        expected_version=expected_version,
+                        reason="paragraph_changed",
+                    )
+            elif expected_version is not None and int(expected_version) != current:
+                raise store.VersionConflict(
+                    f"论文当前为 v{current}，批量改写结果基于 v{expected_version}，"
+                    "全部未保存；请重新生成后再采纳。",
+                    current_version=current,
+                    expected_version=int(expected_version),
+                    reason="version_changed",
+                )
+            updates[paragraph_id] = text
+
+        for paragraph_id, text in updates.items():
+            by_id[paragraph_id]["text"] = text
+        version = store.save_version(
+            paper_id, paragraphs, note=f"批量采纳 {len(updates)} 段改写"
+        )
+        store.mark_analysis_stale(paper_id)
+    return {
+        "version": version,
+        "paragraph_ids": list(updates),
         "versions": store.list_versions(paper_id),
     }

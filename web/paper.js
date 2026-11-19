@@ -39,7 +39,14 @@ const paperState = {
   batchErrors: [],
   batchIds: new Set(),
   askDockBound: false,
-  askAbort: null,
+  listQuery: "",
+  listOffset: 0,
+  listLimit: 50,
+  listTotal: 0,
+  listHasMore: false,
+  listSeq: 0,
+  listTimer: null,
+  taskSources: new Set(),
 };
 
 const PAPER_DIM_LABELS = {
@@ -65,10 +72,6 @@ function pwHideAlert() {
   $("paper-alert").classList.add("hidden");
 }
 
-function pwStepPanels() {
-  return Array.from(document.querySelectorAll(".paper-step-panel"));
-}
-
 function pwSetStep(n, force) {
   if (!force && n > paperState.maxStep) return;
   paperState.step = n;
@@ -77,7 +80,7 @@ function pwSetStep(n, force) {
     b.classList.toggle("active", s === n);
     b.classList.toggle("done", s < paperState.maxStep);
   });
-  pwStepPanels().forEach((p) => p.classList.toggle("active", p.id === `paper-step-${n}`));
+  document.querySelectorAll(".paper-step-panel").forEach((p) => p.classList.toggle("active", p.id === `paper-step-${n}`));
   if (n === 4) pwLoadSimilar();
   if (n === 5) pwLoadParagraphs();
   pwSaveLastState();
@@ -105,7 +108,9 @@ function pwQuotaText(q) {
   if (q.unlimited) {
     return `管理员账号：今日已用 ${q.used} 次，不限额度`;
   }
-  return `今日 LLM 配额：剩余 ${q.remaining} / 共 ${q.limit} 次`;
+  const reserved = Number(q.reserved || 0);
+  const suffix = reserved > 0 ? `（任务预留 ${reserved} 次）` : "";
+  return `今日 LLM 配额：剩余 ${q.remaining} / 共 ${q.limit} 次${suffix}`;
 }
 
 function reloadPaperAuthState() {
@@ -126,10 +131,105 @@ function pwClearTimers() {
   if (paperState.uploadTimer) { clearTimeout(paperState.uploadTimer); paperState.uploadTimer = null; }
   if (paperState.rewriteTimer) { clearTimeout(paperState.rewriteTimer); paperState.rewriteTimer = null; }
   if (paperState.batchTimer) { clearTimeout(paperState.batchTimer); paperState.batchTimer = null; }
+  paperState.taskSources.forEach((source) => {
+    try { source.close(); } catch (e) { /* ignore */ }
+  });
+  paperState.taskSources.clear();
+}
+
+// 任务状态优先走 SSE；不支持或连接失败时回退到单次状态查询轮询。
+function pwWatchTask(paperId, taskId, opts) {
+  const terminal = new Set(["done", "error", "cancelled"]);
+  const interval = opts.interval || 1200;
+  let stopped = false;
+  let fallbackStarted = false;
+  let timer = null;
+  let source = null;
+  let chain = Promise.resolve();
+
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (source) {
+      paperState.taskSources.delete(source);
+      try { source.close(); } catch (e) { /* ignore */ }
+      source = null;
+    }
+    if (opts.timerKey) paperState[opts.timerKey] = null;
+  };
+
+  const handle = (view) => {
+    if (stopped) return;
+    if (opts.isCurrent && !opts.isCurrent()) { stop(); return; }
+    const isTerminal = terminal.has(view.status);
+    chain = chain
+      .then(() => opts.onView(view))
+      .catch((e) => {
+        stop();
+        if (opts.onError) opts.onError(e);
+      })
+      .finally(() => {
+        if (isTerminal) stop();
+      });
+  };
+
+  const fallback = () => {
+    if (fallbackStarted) return;
+    fallbackStarted = true;
+    stop();
+    stopped = false;
+    poll();
+  };
+
+  const poll = async () => {
+    if (stopped) return;
+    try {
+      const view = await api(opts.statusUrl);
+      if (stopped) return;
+      if (opts.isCurrent && !opts.isCurrent()) { stop(); return; }
+      chain = chain.then(() => opts.onView(view));
+      const isTerminal = terminal.has(view.status);
+      await chain;
+      if (isTerminal) { stop(); return; }
+      if (!stopped) {
+        timer = setTimeout(poll, interval);
+        if (opts.timerKey) paperState[opts.timerKey] = timer;
+      }
+    } catch (e) {
+      stop();
+      if (opts.onError) opts.onError(e);
+    }
+  };
+
+  if (!paperId || !taskId || typeof window.EventSource !== "function") {
+    poll();
+    return;
+  }
+
+  try {
+    const base = `/api/paper/${encodeURIComponent(paperId)}/tasks/${encodeURIComponent(taskId)}/events`;
+    source = new window.EventSource(base);
+    paperState.taskSources.add(source);
+    source.onmessage = (event) => {
+      try { handle(JSON.parse(event.data)); } catch (e) { /* ignore malformed frame */ }
+    };
+    source.addEventListener("end", () => stop());
+    source.onerror = () => {
+      if (stopped) return;
+      fallback();
+    };
+  } catch (e) {
+    fallback();
+  }
 }
 
 // ---------- 通用任务进度 ----------
 const PAPER_STAGE_LABELS = {
+  queued: "排队中",
   starting: "准备中",
   init: "准备中",
   parse: "解析中",
@@ -196,25 +296,6 @@ function pwClearLastState() {
   try { localStorage.removeItem(PAPER_LAST_KEY); } catch (e) { /* ignore */ }
 }
 
-function pwDiagProgress(percent, stage) {
-  const box = $("paper-diag-progress");
-  if (!box) return;
-  box.classList.remove("hidden");
-  const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
-  $("paper-diag-fill").style.width = p + "%";
-  $("paper-diag-percent").textContent = p + "%";
-  if (stage) $("paper-diag-stage").textContent = stage;
-}
-
-function pwDiagProgressHide() {
-  const box = $("paper-diag-progress");
-  if (box) box.classList.add("hidden");
-  const fill = $("paper-diag-fill");
-  if (fill) fill.style.width = "0%";
-  const pct = $("paper-diag-percent");
-  if (pct) pct.textContent = "0%";
-}
-
 function pwDiagCancelReset() {
   const btn = $("btn-paper-cancel");
   if (!btn) return;
@@ -233,12 +314,29 @@ async function initPaperPage() {
     if (e.target.value) pwLoadPaper(e.target.value).catch(pwError);
     else pwResetPaper();
   });
+  $("paper-search").addEventListener("input", () => {
+    clearTimeout(paperState.listTimer);
+    paperState.listTimer = setTimeout(() => {
+      pwLoadList({ reset: true }).catch(pwError);
+    }, 250);
+  });
+  $("btn-paper-more").addEventListener("click", () => {
+    pwLoadList({ reset: false }).catch(pwError);
+  });
   $("btn-paper-refresh").addEventListener("click", () => {
     pwLoadList().catch(pwError);
     if (paperState.paperId) pwLoadPaper(paperState.paperId).catch(pwError);
   });
   $("btn-paper-new").addEventListener("click", () => pwNewPaper());
+  $("btn-paper-restore").addEventListener("click", () => $("paper-restore-file").click());
+  $("paper-restore-file").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (file) pwRestoreBackup(file).catch(pwError);
+  });
   $("btn-paper-delete").addEventListener("click", () => pwDelete().catch(pwError));
+  $("btn-paper-backup").addEventListener("click", () => pwBackup().catch(pwError));
+  $("btn-paper-cleanup").addEventListener("click", () => pwCleanupVersions().catch(pwError));
   $("btn-paper-confirm").addEventListener("click", () => pwConfirm().catch(pwError));
   $("btn-paper-upload-cancel").addEventListener("click", () => pwCancelUpload().catch(pwError));
   $("btn-paper-diagnose").addEventListener("click", () => pwStartDiagnose().catch(pwError));
@@ -250,6 +348,7 @@ async function initPaperPage() {
   $("btn-paper-rewrite").addEventListener("click", () => pwRewrite().catch(pwError));
   $("btn-paper-rewrite-cancel").addEventListener("click", () => pwCancelRewrite().catch(pwError));
   $("btn-paper-batch").addEventListener("click", () => pwBatchRewrite().catch(pwError));
+  $("btn-paper-batch-adopt").addEventListener("click", () => pwAdoptBatch().catch(pwError));
   $("btn-paper-batch-clear").addEventListener("click", () => pwClearBatchSelection());
   $("btn-paper-batch-cancel").addEventListener("click", () => pwCancelBatch().catch(pwError));
   $("paper-batch-results").addEventListener("click", (e) => {
@@ -359,19 +458,80 @@ function pwError(e) {
 }
 
 // ---------- 列表 / 详情 ----------
-async function pwLoadList() {
-  const data = await api("/api/paper");
+function pwPaperOptionText(p) {
+  const title = p.title || p.filename || p.id;
+  return `${title}（v${p.current_version || 0} · ${p.paragraph_count || 0} 段）`;
+}
+
+function pwHasOption(sel, value) {
+  return Array.from(sel.options || []).some((x) => x.value === value);
+}
+
+function pwAppendPaperOption(sel, p, suffix) {
+  if (!p || !p.id || pwHasOption(sel, p.id)) return;
+  const opt = document.createElement("option");
+  opt.value = p.id;
+  opt.textContent = pwPaperOptionText(p) + (suffix || "");
+  sel.appendChild(opt);
+}
+
+function pwEnsurePaperOption(sel, paperId) {
+  if (!paperId || pwHasOption(sel, paperId)) return;
+  const current = paperState.paper && paperState.paper.id === paperId
+    ? paperState.paper
+    : { id: paperId, title: "当前论文" };
+  pwAppendPaperOption(sel, current, "（当前）");
+}
+
+function pwRenderListCount() {
+  const el = $("paper-list-count");
+  if (!el) return;
+  const shown = Math.min(paperState.listOffset, paperState.listTotal);
+  if (!paperState.listQuery) {
+    el.textContent = paperState.listTotal
+      ? `共 ${paperState.listTotal} 篇${paperState.listHasMore ? `，已显示 ${shown} 篇` : ""}`
+      : "";
+    return;
+  }
+  el.textContent = paperState.listTotal
+    ? `匹配 ${paperState.listTotal} 篇${paperState.listHasMore ? `，已显示 ${shown} 篇` : ""}`
+    : "无匹配论文";
+}
+
+async function pwLoadList(opts = {}) {
+  const reset = opts.reset !== false;
+  if (reset) {
+    paperState.listQuery = String(
+      opts.query !== undefined ? opts.query : ($("paper-search").value || "")
+    ).trim();
+  }
+  const seq = ++paperState.listSeq;
+  const offset = reset ? 0 : paperState.listOffset;
+  let params = `offset=${offset}&limit=${paperState.listLimit}`;
+  if (paperState.listQuery) params += "&q=" + encodeURIComponent(paperState.listQuery);
+  const more = $("btn-paper-more");
+  more.disabled = true;
+  let data;
+  try {
+    data = await api("/api/paper?" + params);
+  } finally {
+    if (seq === paperState.listSeq) more.disabled = false;
+  }
+  if (seq !== paperState.listSeq) return;
+
   const sel = $("paper-select");
   const keep = paperState.paperId || sel.value;
-  sel.innerHTML = '<option value="">选择论文...</option>';
-  (data.papers || []).forEach((p) => {
-    const opt = document.createElement("option");
-    opt.value = p.id;
-    const title = p.title || p.filename || p.id;
-    opt.textContent = `${title}（v${p.current_version || 0} · ${p.paragraph_count || 0} 段）`;
-    sel.appendChild(opt);
-  });
-  if (keep && Array.from(sel.options).some((x) => x.value === keep)) sel.value = keep;
+  if (reset) sel.innerHTML = '<option value="">选择论文...</option>';
+  (data.papers || []).forEach((p) => pwAppendPaperOption(sel, p));
+  paperState.listOffset = Number(data.offset || 0) + (data.papers || []).length;
+  paperState.listTotal = Number(data.total || 0);
+  paperState.listHasMore = !!data.has_more;
+  if (keep) {
+    pwEnsurePaperOption(sel, keep);
+    sel.value = keep;
+  }
+  more.classList.toggle("hidden", !paperState.listHasMore);
+  pwRenderListCount();
 }
 
 function pwResetPaper() {
@@ -413,13 +573,15 @@ function pwResetPaper() {
   paperState.batchResults = [];
   paperState.batchErrors = [];
   paperState.batchIds = new Set();
-  pwDiagProgressHide();
+  pwTaskProgressHide("paper-diag");
   pwDiagCancelReset();
   pwTaskProgressHide("paper-upload");
   pwTaskProgressHide("paper-similar");
   pwTaskProgressHide("paper-rewrite");
   pwTaskProgressHide("paper-batch");
   $("paper-batch-results").innerHTML = "";
+  $("btn-paper-batch-adopt").classList.add("hidden");
+  $("btn-paper-batch-adopt").disabled = true;
   $("btn-paper-similar-cancel").classList.add("hidden");
   $("btn-paper-rewrite-cancel").classList.add("hidden");
   $("paper-ask-answer").classList.add("hidden");
@@ -458,11 +620,12 @@ async function pwLoadPaper(paperId, opts = {}) {
     $("paper-batch-results").innerHTML = "";
     $("btn-paper-batch-cancel").disabled = false;
     pwTaskProgressHide("paper-batch");
+    pwSyncBatchAdoptButton();
   }
   if (paperState.diagPaperId && paperState.diagPaperId !== paperId) {
     paperState.diagPaperId = "";
     paperState.diagTaskId = "";
-    pwDiagProgressHide();
+    pwTaskProgressHide("paper-diag");
     pwDiagCancelReset();
   }
   paperState.paperId = paperId;
@@ -496,6 +659,7 @@ async function pwLoadPaper(paperId, opts = {}) {
   $("btn-paper-similar-refresh").disabled = false;
   $("paper-similar-status").textContent = "";
   pwRenderGuideline({ guideline: null });
+  pwEnsurePaperOption($("paper-select"), paperId);
   $("paper-select").value = paperId;
   pwClearDiff();
   $("paper-original").textContent = "在左侧选择一个正文段落。";
@@ -526,7 +690,8 @@ async function pwLoadPaper(paperId, opts = {}) {
       ? "已根据论文内容自动预填，请核对后点击「确认需求」"
       : "需求未确认：请填写并确认后再诊断");
 
-  $("paper-version").textContent = `当前版本 v${p.current_version || 0}（共 ${p.version_count || 1} 个版本）`;
+  const archivedNote = p.archived_count ? `，已归档 ${p.archived_count} 个` : "";
+  $("paper-version").textContent = `当前版本 v${p.current_version || 0}（共 ${p.version_count || 1} 个版本${archivedNote}）`;
   $("paper-upload-result").innerHTML =
     `<p><b>${esc(p.title || p.filename || paperId)}</b></p>
      <p class="muted">${esc(p.filename || "")} · ${p.pages || 0} 页 · ${p.chars || 0} 字符 · ${p.paragraph_count || 0} 段 · ${p.source_type === "docx" ? "Word" : "PDF"}</p>`;
@@ -621,25 +786,26 @@ function pwUploadFile(fd) {
 
 function pwPollUpload(taskId) {
   return new Promise((resolve, reject) => {
-    const tick = async () => {
-      try {
-        const t = await api(`/api/paper/upload/${encodeURIComponent(taskId)}`);
+    pwWatchTask(paperState.uploadPaperId || paperState.paperId, taskId, {
+      statusUrl: `/api/paper/upload/${encodeURIComponent(taskId)}`,
+      interval: 700,
+      timerKey: "uploadTimer",
+      isCurrent: () => paperState.uploadTaskId === taskId,
+      onView: (t) => {
         const pct = 20 + Math.round((Number(t.progress) || 0) * 0.8);
         pwTaskProgress("paper-upload", pct, t.stage || "正在解析论文…");
-        if (t.status === "done") { resolve(t.report || {}); return; }
+        if (t.status === "done") { resolve(t.report || {}); return true; }
         if (t.status === "cancelled") {
           const err = new Error("已取消上传");
           err.cancelled = true;
           reject(err);
-          return;
+          return true;
         }
-        if (t.status === "error") { reject(new Error(t.error || "论文解析失败")); return; }
-        paperState.uploadTimer = setTimeout(tick, 700);
-      } catch (e) {
-        reject(e);
-      }
-    };
-    tick();
+        if (t.status === "error") { reject(new Error(t.error || "论文解析失败")); return true; }
+        return false;
+      },
+      onError: (e) => reject(e),
+    });
   });
 }
 
@@ -722,7 +888,7 @@ async function pwStartDiagnose() {
   $("btn-paper-cancel").classList.remove("hidden");
   $("btn-paper-cancel").disabled = false;
   $("btn-paper-cancel").textContent = "取消诊断";
-  pwDiagProgress(0, "正在准备论文与模型…");
+  pwTaskProgress("paper-diag", 0, "正在准备论文与模型…");
   $("paper-dim-cards").innerHTML = '<span class="muted">诊断中，通常需要 30~90 秒...</span>';
   try {
     const r = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/diagnose`, { dimensions: [] });
@@ -732,7 +898,7 @@ async function pwStartDiagnose() {
     btn.disabled = false;
     paperState.diagPaperId = "";
     paperState.diagTaskId = "";
-    pwDiagProgressHide();
+    pwTaskProgressHide("paper-diag");
     pwDiagCancelReset();
     pwAlert(e.message, "err");
   }
@@ -760,24 +926,26 @@ async function pwCancelDiagnose() {
 
 function pwPollDiagnose(taskId) {
   const pid = paperState.paperId;
-  const tick = async () => {
-    if (paperState.paperId !== pid) return;
-    try {
-      const t = await api(`/api/paper/${encodeURIComponent(pid)}/diagnose/${taskId}`);
+  pwWatchTask(pid, taskId, {
+    statusUrl: `/api/paper/${encodeURIComponent(pid)}/diagnose/${taskId}`,
+    interval: 1200,
+    timerKey: "diagTimer",
+    isCurrent: () => paperState.paperId === pid,
+    onView: (t) => {
       const logLines = t.logs || [];
       $("paper-diag-logs").textContent = logLines.join("\n");
-      pwDiagProgress(
+      pwTaskProgress("paper-diag",
         typeof t.progress === "number" ? t.progress : 0,
         logLines[logLines.length - 1] || "正在诊断…"
       );
       if (t.status === "done") {
         $("btn-paper-diagnose").disabled = false;
-        pwDiagProgress(100, "诊断完成");
+        pwTaskProgress("paper-diag", 100, "诊断完成");
         paperState.diagPaperId = "";
         paperState.diagTaskId = "";
         pwDiagCancelReset();
         setTimeout(() => {
-          if (!paperState.diagPaperId) pwDiagProgressHide();
+          if (!paperState.diagPaperId) pwTaskProgressHide("paper-diag");
         }, 1500);
         if (t.report) pwRenderDiagnosis(t.report.dimensions || {}, t.report.total_score);
         if (t.report && t.report.errors && Object.keys(t.report.errors).length) {
@@ -787,38 +955,38 @@ function pwPollDiagnose(taskId) {
         }
         pwRefreshQuota();
         pwLoadPaper(pid).catch(() => {});
-        return;
+        return true;
       }
       if (t.status === "cancelled") {
         $("btn-paper-diagnose").disabled = false;
         paperState.diagPaperId = "";
         paperState.diagTaskId = "";
         pwDiagCancelReset();
-        pwDiagProgressHide();
+        pwTaskProgressHide("paper-diag");
         pwAlert("诊断已取消，已完成维度的结果会保留。可重新点击「开始诊断」。", "warn", 3);
         pwLoadPaper(pid).catch(() => {});
-        return;
+        return true;
       }
       if (t.status === "error") {
         $("btn-paper-diagnose").disabled = false;
         paperState.diagPaperId = "";
         paperState.diagTaskId = "";
         pwDiagCancelReset();
-        pwDiagProgressHide();
+        pwTaskProgressHide("paper-diag");
         pwAlert("诊断失败：" + (t.error || "未知错误"), "err", 3);
-        return;
+        return true;
       }
-      paperState.diagTimer = setTimeout(tick, 1200);
-    } catch (e) {
+      return false;
+    },
+    onError: (e) => {
       $("btn-paper-diagnose").disabled = false;
       paperState.diagPaperId = "";
       paperState.diagTaskId = "";
       pwDiagCancelReset();
-      pwDiagProgressHide();
+      pwTaskProgressHide("paper-diag");
       pwAlert("查询诊断进度失败：" + e.message, "err", 3);
-    }
-  };
-  tick();
+    },
+  });
 }
 
 function pwScoreClass(score) {
@@ -962,10 +1130,12 @@ function pwSimilarBusy(busy) {
 
 function pwPollSimilar(taskId) {
   const pid = paperState.paperId;
-  const tick = async () => {
-    if (paperState.paperId !== pid) return;
-    try {
-      const t = await api(`/api/paper/${encodeURIComponent(pid)}/similar/${taskId}`);
+  pwWatchTask(pid, taskId, {
+    statusUrl: `/api/paper/${encodeURIComponent(pid)}/similar/${taskId}`,
+    interval: 1000,
+    timerKey: "simTimer",
+    isCurrent: () => paperState.paperId === pid,
+    onView: (t) => {
       $("paper-similar-status").textContent = pwStageText(t.stage) || "检索中...";
       pwTaskProgress("paper-similar", t.progress || 0, t.stage || "检索中…");
       if (t.status === "done") {
@@ -975,31 +1145,31 @@ function pwPollSimilar(taskId) {
         setTimeout(() => pwTaskProgressHide("paper-similar"), 800);
         pwRenderSimilar(t.report || { items: [] });
         if (t.report && t.report.error) pwAlert(t.report.error, "warn", 4);
-        return;
+        return true;
       }
       if (t.status === "cancelled") {
         paperState.similarTaskId = "";
         pwSimilarBusy(false);
         pwTaskProgressHide("paper-similar");
         pwAlert("已取消相似论文检索。", "warn", 4);
-        return;
+        return true;
       }
       if (t.status === "error") {
         paperState.similarTaskId = "";
         pwSimilarBusy(false);
         pwTaskProgressHide("paper-similar");
         pwAlert("相似论文检索失败：" + (t.error || "未知错误"), "err", 4);
-        return;
+        return true;
       }
-      paperState.simTimer = setTimeout(tick, 1000);
-    } catch (e) {
+      return false;
+    },
+    onError: (e) => {
       paperState.similarTaskId = "";
       pwSimilarBusy(false);
       pwTaskProgressHide("paper-similar");
       pwAlert("查询检索进度失败：" + e.message, "err", 4);
-    }
-  };
-  tick();
+    },
+  });
 }
 
 async function pwCancelSimilar() {
@@ -1157,6 +1327,7 @@ async function pwBatchRewrite() {
   paperState.batchResults = [];
   paperState.batchErrors = [];
   $("paper-batch-results").innerHTML = "";
+  pwSyncBatchAdoptButton();
   pwTaskProgress("paper-batch", 0, "正在准备批量改写…");
   try {
     const r = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/rewrite/batch`, {
@@ -1177,10 +1348,12 @@ async function pwBatchRewrite() {
 
 function pwPollBatch(taskId) {
   const pid = paperState.paperId;
-  const tick = async () => {
-    if (paperState.paperId !== pid) return;
-    try {
-      const t = await api(`/api/paper/${encodeURIComponent(pid)}/rewrite/${taskId}`);
+  pwWatchTask(pid, taskId, {
+    statusUrl: `/api/paper/${encodeURIComponent(pid)}/rewrite/${taskId}`,
+    interval: 1200,
+    timerKey: "batchTimer",
+    isCurrent: () => paperState.paperId === pid,
+    onView: (t) => {
       const lastLog = (t.logs || []).slice(-1)[0];
       pwTaskProgress("paper-batch", t.progress || 0, lastLog || "正在批量改写…");
       if (t.status === "done" || t.status === "cancelled") {
@@ -1195,29 +1368,31 @@ function pwPollBatch(taskId) {
         } else {
           const failed = paperState.batchErrors.length;
           pwAlert(`批量改写完成：成功 ${paperState.batchResults.length} 段`
-            + (failed ? `，失败 ${failed} 段` : "") + "。请逐段查看差异后采纳。", "ok", 5);
+            + (failed ? `，失败 ${failed} 段` : "") + "。请逐段查看差异，或使用全部采纳成功段。", "ok", 5);
           pwRefreshQuota();
         }
         pwTaskProgress("paper-batch", 100, t.status === "cancelled" ? "已取消" : "批量改写完成");
         setTimeout(() => pwTaskProgressHide("paper-batch"), 900);
-        return;
+        return true;
       }
       if (t.status === "error") {
         paperState.batchTaskId = "";
         pwTaskProgressHide("paper-batch");
         $("btn-paper-batch").disabled = false;
+        pwSyncBatchAdoptButton();
         pwAlert("批量改写失败：" + (t.error || "未知错误"), "err", 5);
-        return;
+        return true;
       }
-      paperState.batchTimer = setTimeout(tick, 1200);
-    } catch (e) {
+      return false;
+    },
+    onError: (e) => {
       paperState.batchTaskId = "";
       pwTaskProgressHide("paper-batch");
       $("btn-paper-batch").disabled = false;
+      pwSyncBatchAdoptButton();
       pwAlert("查询批量改写进度失败：" + e.message, "err", 5);
-    }
-  };
-  tick();
+    },
+  });
 }
 
 async function pwCancelBatch() {
@@ -1231,23 +1406,41 @@ async function pwCancelBatch() {
   }
 }
 
+function pwSyncBatchAdoptButton() {
+  const btn = $("btn-paper-batch-adopt");
+  const count = (paperState.batchResults || []).length;
+  btn.textContent = `全部采纳成功段（${count}）`;
+  btn.classList.toggle("hidden", count === 0);
+  btn.disabled = count === 0 || !!paperState.batchTaskId;
+}
+
 function pwRenderBatchResults() {
   const box = $("paper-batch-results");
   const items = paperState.batchResults || [];
   const errors = paperState.batchErrors || [];
-  if (!items.length && !errors.length) { box.innerHTML = ""; return; }
+  if (!items.length && !errors.length) {
+    box.innerHTML = "";
+    pwSyncBatchAdoptButton();
+    return;
+  }
   const rows = items.map((r) => {
     const before = Number(r.ai_score_before || 0);
     const after = Number(r.ai_score_after || 0);
+    const hasVersion = r.source_version !== undefined && r.source_version !== null;
+    const current = Number((paperState.paper && paperState.paper.current_version) || 0);
+    const versionTag = hasVersion
+      ? ` · 基于 v${r.source_version}${Number(r.source_version) !== current ? "（论文已更新）" : ""}`
+      : "";
     return `<div class="batch-item">
-      <div class="batch-meta"><b>${esc(r.paragraph_id)} · 已完成</b>AI 味 ${before} → ${after} · ${(r.revised || "").length} 字</div>
+      <div class="batch-meta"><b>${esc(r.paragraph_id)} · 已完成</b>AI 味 ${before} → ${after} · ${(r.revised || "").length} 字${versionTag}</div>
       <button class="btn btn-ghost" data-batch-pid="${esc(r.paragraph_id)}">查看差异</button>
     </div>`;
   });
   const errRows = errors.map((e) => `<div class="batch-item err">
       <div class="batch-meta"><b>${esc(e.paragraph_id)} · 失败</b>${esc(e.error || "未知错误")}</div>
     </div>`);
-  box.innerHTML = `<div class="muted">批量结果（可单独查看并按段采纳）</div>${rows.concat(errRows).join("")}`;
+  box.innerHTML = `<div class="muted">批量结果：可逐段查看并采纳；全部采纳会一次保存为同一版本，任一段正文变化或校验失败则全部不保存，失败段不会保存。</div>${rows.concat(errRows).join("")}`;
+  pwSyncBatchAdoptButton();
 }
 
 async function pwShowBatchResult(item) {
@@ -1342,21 +1535,14 @@ function pwRenderGuideline(r) {
 }
 
 function pwGuideProgress(percent, stage) {
-  const box = $("paper-guide-progress");
-  box.classList.remove("hidden");
-  const p = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
-  $("paper-guide-fill").style.width = p + "%";
-  $("paper-guide-percent").textContent = p + "%";
+  pwTaskProgress("paper-guide", percent, stage);
   if (stage) {
-    $("paper-guide-stage").textContent = stage;
     $("paper-guide-status").textContent = stage;
   }
 }
 
 function pwGuideProgressHide() {
-  $("paper-guide-progress").classList.add("hidden");
-  $("paper-guide-fill").style.width = "0%";
-  $("paper-guide-percent").textContent = "0%";
+  pwTaskProgressHide("paper-guide");
   $("btn-paper-guide-cancel").disabled = false;
 }
 
@@ -1369,9 +1555,12 @@ function pwGuideFinish() {
 }
 
 function pwPollGuideline(taskId, pid) {
-  const tick = async () => {
-    try {
-      const t = await api(`/api/paper/${encodeURIComponent(pid)}/rewrite/guideline/${encodeURIComponent(taskId)}`);
+  pwWatchTask(pid, taskId, {
+    statusUrl: `/api/paper/${encodeURIComponent(pid)}/rewrite/guideline/${encodeURIComponent(taskId)}`,
+    interval: 1200,
+    timerKey: "guideTimer",
+    isCurrent: () => paperState.guideTaskId === taskId && paperState.guidePaperId === pid,
+    onView: (t) => {
       const logs = t.logs || [];
       const stage = logs.length ? logs[logs.length - 1] : "正在生成方针…";
       pwGuideProgress(t.progress, stage);
@@ -1383,28 +1572,28 @@ function pwPollGuideline(taskId, pid) {
         }
         pwRefreshQuota();
         pwAlert("全局改写方针已生成，逐段改写时会自动套用。", "ok", 5);
-        return;
+        return true;
       }
       if (t.status === "cancelled") {
         pwGuideFinish();
         $("paper-guide-status").textContent = "已取消生成，本次结果不保存。";
         pwAlert("已取消生成全局改写方针。", "warn", 5);
-        return;
+        return true;
       }
       if (t.status === "error") {
         pwGuideFinish();
         $("paper-guide-status").textContent = "方针生成失败，请稍后重试。";
         pwAlert(t.error || "方针生成失败", "err", 5);
-        return;
+        return true;
       }
-      paperState.guideTimer = setTimeout(tick, 1200);
-    } catch (e) {
+      return false;
+    },
+    onError: (e) => {
       pwGuideFinish();
       $("paper-guide-status").textContent = "查询方针进度失败，请稍后重试。";
       pwAlert("查询方针进度失败：" + e.message, "err", 5);
-    }
-  };
-  tick();
+    },
+  });
 }
 
 async function pwGenerateGuideline() {
@@ -1495,10 +1684,12 @@ async function pwRewrite() {
 }
 
 function pwPollRewrite(taskId, pid) {
-  const tick = async () => {
-    if (paperState.paperId !== pid || paperState.rewriteTaskId !== taskId) return;
-    try {
-      const t = await api(`/api/paper/${encodeURIComponent(pid)}/rewrite/${taskId}`);
+  pwWatchTask(pid, taskId, {
+    statusUrl: `/api/paper/${encodeURIComponent(pid)}/rewrite/${taskId}`,
+    interval: 1000,
+    timerKey: "rewriteTimer",
+    isCurrent: () => paperState.paperId === pid && paperState.rewriteTaskId === taskId,
+    onView: async (t) => {
       const lastLog = (t.logs || []).slice(-1)[0];
       pwTaskProgress("paper-rewrite", t.progress || 0, lastLog || "模型正在改写…");
       if (t.status === "done") {
@@ -1515,7 +1706,7 @@ function pwPollRewrite(taskId, pid) {
         pwTaskProgress("paper-rewrite", 100, "改写完成");
         setTimeout(() => pwTaskProgressHide("paper-rewrite"), 800);
         pwRefreshQuota();
-        return;
+        return true;
       }
       if (t.status === "cancelled") {
         paperState.rewriteTaskId = "";
@@ -1525,7 +1716,7 @@ function pwPollRewrite(taskId, pid) {
         pwTaskProgressHide("paper-rewrite");
         $("paper-rewrite-meta").textContent = "已取消改写，本次结果不保存。";
         pwAlert("已取消改写。", "warn", 5);
-        return;
+        return true;
       }
       if (t.status === "error") {
         paperState.rewriteTaskId = "";
@@ -1535,19 +1726,19 @@ function pwPollRewrite(taskId, pid) {
         pwTaskProgressHide("paper-rewrite");
         $("paper-rewrite-meta").textContent = "";
         pwAlert("改写失败：" + (t.error || "未知错误"), "err", 5);
-        return;
+        return true;
       }
-      paperState.rewriteTimer = setTimeout(tick, 1000);
-    } catch (e) {
+      return false;
+    },
+    onError: (e) => {
       paperState.rewriteTaskId = "";
       paperState.rewritePaperId = "";
       paperState.rewriteParaId = "";
       pwRewriteBusy(false);
       pwTaskProgressHide("paper-rewrite");
       pwAlert("查询改写进度失败：" + e.message, "err", 5);
-    }
-  };
-  tick();
+    },
+  });
 }
 
 async function pwCancelRewrite() {
@@ -1642,11 +1833,20 @@ function pwRenderDiff(r) {
   const after = Number(r.ai_score_after || 0);
   const arrow = after < before ? "↓" : after > before ? "↑" : "→";
   const pid = r.paragraph_id || (paperState.selected && paperState.selected.id) || "";
+  const hasVersion = r.source_version !== undefined && r.source_version !== null;
+  const current = Number((paperState.paper && paperState.paper.current_version) || 0);
+  const versionNote = hasVersion
+    ? ` · 基于 v${r.source_version}${Number(r.source_version) !== current ? `（当前 v${current}）` : ""}`
+    : "";
   $("paper-rewrite-meta").textContent =
     `${pid} · AI 味风险 ${before} ${arrow} ${after} · 原文 ${(r.original || "").length} 字 → 改写 ${(r.revised || "").length} 字`
-    + (r.guideline_used ? " · 已套用全局方针" : "");
-  if (r.warning) {
-    $("paper-rewrite-warning").textContent = r.warning;
+    + (r.guideline_used ? " · 已套用全局方针" : "")
+    + versionNote;
+  const staleNote = hasVersion && Number(r.source_version) !== current
+    ? `该改写基于 v${r.source_version} 生成，论文当前为 v${current}；只要本段正文未变仍可采纳。`
+    : "";
+  if (r.warning || staleNote) {
+    $("paper-rewrite-warning").textContent = [staleNote, r.warning].filter(Boolean).join(" ");
     $("paper-rewrite-warning").classList.remove("hidden");
   } else {
     $("paper-rewrite-warning").classList.add("hidden");
@@ -1672,11 +1872,18 @@ async function pwAdopt() {
   }
   const btn = $("btn-paper-adopt");
   btn.disabled = true;
+  const payload = {
+    paragraph_id: paperState.selected.id,
+    revised: revised,
+  };
+  if (r.source_version !== undefined && r.source_version !== null) {
+    payload.expected_version = Number(r.source_version);
+  }
+  if (typeof r.original === "string") {
+    payload.expected_original = r.original;
+  }
   try {
-    const res = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/apply`, {
-      paragraph_id: paperState.selected.id,
-      revised: revised,
-    });
+    const res = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/apply`, payload);
     paperState.rewrite = null;
     paperState.diff = null;
     if ((paperState.batchResults || []).length) {
@@ -1685,18 +1892,88 @@ async function pwAdopt() {
       );
     }
     paperState.batchIds.delete(res.paragraph_id);
+    await pwLoadList();
     await pwLoadPaper(paperState.paperId, { restoreStep: 5 });
     await pwSelectParagraph(res.paragraph_id).catch(() => {});
     pwRenderBatchResults();
     pwSetStep(5, true);
     pwAlert(`已采纳并保存为 v${res.version}。如需回退，可删除后重新上传，或继续逐段优化。`, "ok");
+  } catch (e) {
+    if (e && e.status === 409) {
+      // 保留当前差异对比，只刷新论文版本信息，便于用户重新生成或复制内容
+      const body = e.payload || {};
+      const detail = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}`).catch(() => null);
+      if (detail) {
+        paperState.paper = detail;
+        const archived = detail.archived_count ? `，已归档 ${detail.archived_count} 个` : "";
+        $("paper-version").textContent = `当前版本 v${detail.current_version || 0}（共 ${detail.version_count || 1} 个版本${archived}）`;
+      }
+      await pwLoadList().catch(() => {});
+      const cur = body.current_version != null ? body.current_version : "?";
+      pwAlert(`论文已更新（当前 v${cur}）：${e.message} 当前差异对比仍保留在页面中。`, "warn", 5);
+    } else {
+      pwAlert("采纳失败：" + (e && e.message ? e.message : "未知错误"), "err", 5);
+    }
   } finally {
     btn.disabled = false;
   }
 }
 
-function pwExportFilename(resp, format) {
-  const fallback = format === "summary" ? "论文修改说明.docx" : `optimized.${format}`;
+async function pwAdoptBatch() {
+  const items = paperState.batchResults || [];
+  if (!paperState.paperId || !items.length) return;
+  if (paperState.batchTaskId) {
+    pwAlert("批量改写仍在进行中，请等待完成或先取消任务。", "warn");
+    return;
+  }
+  const btn = $("btn-paper-batch-adopt");
+  btn.disabled = true;
+  const payload = {
+    items: items.map((r) => {
+      const item = { paragraph_id: r.paragraph_id, revised: r.revised };
+      if (r.source_version !== undefined && r.source_version !== null) {
+        item.expected_version = Number(r.source_version);
+      }
+      if (typeof r.original === "string") item.expected_original = r.original;
+      return item;
+    }),
+  };
+  try {
+    const res = await postJSON(
+      `/api/paper/${encodeURIComponent(paperState.paperId)}/apply-batch`, payload
+    );
+    const adopted = new Set(res.paragraph_ids || items.map((x) => x.paragraph_id));
+    paperState.batchResults = items.filter((x) => !adopted.has(x.paragraph_id));
+    adopted.forEach((pid) => paperState.batchIds.delete(pid));
+    paperState.rewrite = null;
+    paperState.diff = null;
+    await pwLoadList();
+    await pwLoadPaper(paperState.paperId, { restoreStep: 5 });
+    pwRenderBatchResults();
+    pwSetStep(5, true);
+    pwAlert(`已批量采纳 ${adopted.size} 段，保存为 v${res.version}。`, "ok", 5);
+  } catch (e) {
+    if (e && e.status === 409) {
+      const body = e.payload || {};
+      const detail = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}`).catch(() => null);
+      if (detail) {
+        paperState.paper = detail;
+        const archived = detail.archived_count ? `，已归档 ${detail.archived_count} 个` : "";
+        $("paper-version").textContent = `当前版本 v${detail.current_version || 0}（共 ${detail.version_count || 1} 个版本${archived}）`;
+      }
+      await pwLoadList().catch(() => {});
+      const cur = body.current_version != null ? body.current_version : "?";
+      pwAlert(`批量采纳未保存（当前 v${cur}）：${e.message}`, "warn", 6);
+    } else {
+      pwAlert("批量采纳失败：" + (e && e.message ? e.message : "未知错误"), "err", 5);
+    }
+  } finally {
+    pwSyncBatchAdoptButton();
+  }
+}
+
+function pwExportFilename(resp, format, fallbackName) {
+  const fallback = fallbackName || (format === "summary" ? "论文修改说明.docx" : `optimized.${format}`);
   const cd = resp.headers.get("Content-Disposition") || "";
   const m = /filename\*=UTF-8''([^;]+)/i.exec(cd);
   if (m) {
@@ -1730,6 +2007,80 @@ async function pwExport(format = "docx") {
   } catch (e) {
     pwAlert("导出失败：" + e.message, "err");
   }
+}
+
+// ---------- 备份 / 恢复 / 版本整理 ----------
+function pwPaperStem() {
+  const p = paperState.paper || {};
+  const raw = String(p.filename || p.title || "论文").split(/[\\/]/).pop();
+  return (raw.replace(/\.[^.]+$/, "") || "论文").replace(/[\\/:*?"<>|]+/g, "_").slice(0, 80);
+}
+
+async function pwBackup() {
+  if (!paperState.paperId) { pwAlert("请先上传或选择论文", "warn"); return; }
+  try {
+    const resp = await fetch(`/api/paper/${encodeURIComponent(paperState.paperId)}/backup`);
+    if (!resp.ok) {
+      let detail = "";
+      try { detail = (await resp.json()).detail || ""; } catch (e) {}
+      throw new Error(detail || `HTTP ${resp.status}`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = pwExportFilename(resp, "zip", `${pwPaperStem()}_备份.zip`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    pwAlert("备份已下载：包含论文原文、需求、诊断、版本与已归档版本。", "ok", 5);
+  } catch (e) {
+    pwAlert("备份失败：" + e.message, "err");
+  }
+}
+
+async function pwRestoreBackup(file) {
+  const form = new FormData();
+  form.append("file", file);
+  const resp = await fetch("/api/paper/restore", { method: "POST", body: form });
+  if (!resp.ok) {
+    let detail = "";
+    try { detail = (await resp.json()).detail || ""; } catch (e) {}
+    throw new Error(detail || `HTTP ${resp.status}`);
+  }
+  const result = await resp.json();
+  await pwLoadList();
+  await pwLoadPaper(result.paper_id);
+  pwAlert(`备份已恢复为《${result.title || result.filename || result.paper_id}》，原论文未被修改。`, "ok");
+}
+
+async function pwCleanupVersions() {
+  if (!paperState.paperId) { pwAlert("请先上传或选择论文", "warn"); return; }
+  const raw = window.prompt("除原始版本 v0 和当前版本外，保留最近几个版本？", "5");
+  if (raw === null) return;
+  const keep = Number(String(raw).trim());
+  if (!Number.isInteger(keep) || keep < 0 || keep > 100) {
+    pwAlert("请输入 0-100 之间的整数。", "warn");
+    return;
+  }
+  if (!window.confirm(
+    "较早版本会压缩归档到本机，仍可在历史版本接口中读取；原始版本 v0 和当前版本始终保留。继续？"
+  )) return;
+  const res = await postJSON(
+    `/api/paper/${encodeURIComponent(paperState.paperId)}/versions/cleanup`,
+    { keep_recent: keep }
+  );
+  const archived = (res.archived_versions || []).length;
+  if (paperState.paper) {
+    paperState.paper.version_count = res.version_count;
+    paperState.paper.archived_count = res.archived_count;
+  }
+  const archivedNote = res.archived_count ? `，已归档 ${res.archived_count} 个` : "";
+  $("paper-version").textContent = `当前版本 v${res.current_version}（共 ${res.version_count} 个版本${archivedNote}）`;
+  pwAlert(archived
+    ? `已归档 ${archived} 个较早版本，保留原始版本、当前版本和最近 ${keep} 个版本。`
+    : "没有可整理的旧版本。", "ok", 5);
 }
 
 // ---------- 删除 ----------

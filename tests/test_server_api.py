@@ -1,17 +1,12 @@
 # -*- coding: utf-8 -*-
 """server.py（FastAPI Web 服务）API 层测试。"""
-import json
-import os
-import sys
 from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 import server
 from fastapi.testclient import TestClient
-from utils import auth
+from utils import auth, prefs
 
 client = TestClient(server.app)
 
@@ -20,6 +15,7 @@ client = TestClient(server.app)
 def _admin_session(tmp_path, monkeypatch):
     """设置类接口仅管理员可用；这里直接注入管理员会话。"""
     monkeypatch.setattr(auth, "ADMIN_PATH", str(tmp_path / "admin.json"))
+    monkeypatch.setattr(prefs, "PREFS_PATH", str(tmp_path / "ui_prefs.json"))
     auth.reset_state()
     client.cookies.set(auth.COOKIE_NAME, auth.create_session("admin"))
     yield
@@ -167,8 +163,6 @@ def test_research_unknown_task():
 
 def test_research_failed_report_not_saved():
     """失败报告（限流文案）应标记 failed 且不带 report。"""
-    captured = {}
-
     def _fake_worker(task_id, req):
         server.RESEARCH_TASKS[task_id].update(
             status="failed",

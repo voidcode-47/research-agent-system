@@ -66,6 +66,10 @@ class DiagnosisCancelled(Exception):
     """用户取消诊断（维度之间检查，已完成维度保留）。"""
 
 
+class DiagnosisStale(Exception):
+    """诊断期间论文正文或需求发生变化，结果不能写回当前论文。"""
+
+
 def _now() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -474,9 +478,11 @@ def diagnose(paper_id: str, llm, dimensions: list[str] | None = None,
     should_cancel() 返回 True 时在维度之间停止诊断（当前维度会执行完），
     抛出 DiagnosisCancelled，已完成维度的结果保留在磁盘上。
     """
-    meta = store.load_meta(paper_id)
-    parsed = store.load_parsed(paper_id)
-    requirement = store.load_requirement(paper_id) or {}
+    with store.locked():
+        meta = store.load_meta(paper_id)
+        source_version = int(meta.get("current_version") or 0)
+        parsed = store.current_parsed(paper_id)
+        requirement = store.load_requirement(paper_id) or {}
     if not requirement.get("confirmed"):
         raise ValueError("需求尚未确认，请先完成需求确认")
 
@@ -498,11 +504,18 @@ def diagnose(paper_id: str, llm, dimensions: list[str] | None = None,
                      round(idx * 100 / total))
         try:
             result = _HANDLERS[dim](gateway, parsed, requirement, paper_id)
-            store.save_analysis(paper_id, dim, result)
+            result["source_version"] = source_version
+            if not store.save_analysis_if_current(
+                    paper_id, dim, result, source_version, requirement):
+                raise DiagnosisStale(
+                    "论文或需求在诊断过程中发生变化，旧诊断结果未保存；请重新诊断"
+                )
             results[dim] = result
             if progress:
                 progress("diagnose", f"完成：{label}（{result.get('score')} 分）",
                          round((idx + 1) * 100 / total))
+        except DiagnosisStale:
+            raise
         except Exception as e:
             logger.exception(f"诊断维度失败 {dim}")
             errors[dim] = str(e)
@@ -510,22 +523,29 @@ def diagnose(paper_id: str, llm, dimensions: list[str] | None = None,
                 progress("diagnose", f"失败：{label}（{e}）",
                          round((idx + 1) * 100 / total))
 
-    all_done = all(store.has_analysis(paper_id, d) for d in DIAGNOSIS_DIMENSIONS)
-    try:
+    with store.locked():
+        if not store.analysis_snapshot_matches(
+                paper_id, source_version, requirement):
+            raise DiagnosisStale(
+                "论文或需求在诊断过程中发生变化，旧诊断结果未保存；请重新诊断"
+            )
+        meta = store.load_meta(paper_id)
+        all_done = all(
+            store.has_analysis(paper_id, d) for d in DIAGNOSIS_DIMENSIONS
+        )
         if all_done:
             meta["status"] = "analyzed"
             store.save_meta(paper_id, meta)
         elif meta.get("status") == "analyzed":
             meta["status"] = "confirmed"
             store.save_meta(paper_id, meta)
-    except FileNotFoundError:
-        pass
+        score = total_score(paper_id)
 
     return {
         "paper_id": paper_id,
         "dimensions": results,
         "errors": errors,
-        "total_score": total_score(paper_id),
+        "total_score": score,
         "weights": {d: c["weight"] for d, c in DIAGNOSIS_DIMENSIONS.items()},
         "generated_at": _now(),
     }

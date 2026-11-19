@@ -2,9 +2,20 @@
 import pytest
 from unittest.mock import patch, MagicMock
 
-from llm.base import BaseLLM, ChatResponse, ToolCall
+from llm.base import ChatResponse, ToolCall
+from llm import factory
 from llm.factory import LLMFactory
 from config.llm_config import PROVIDER_CONFIG, get_provider_config
+from config.settings import settings
+
+
+@pytest.fixture(autouse=True)
+def _isolated_factory(monkeypatch):
+    factory._llm_cache.clear()
+    monkeypatch.setattr("llm.openai_llm.OpenAI", MagicMock())
+    monkeypatch.setattr("llm.openai_llm.OpenAICompatibleLLM._discover_model", lambda self: "")
+    yield
+    factory._llm_cache.clear()
 
 
 class TestLLMBase:
@@ -22,45 +33,39 @@ class TestLLMBase:
 
 
 class TestLLMFactory:
-    def test_create_deepseek(self):
-        with patch("config.settings.settings") as mock_s:
-            mock_s.DEEPSEEK_API_KEY = "sk-test"
-            mock_s.DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-            llm = LLMFactory.create("deepseek")
-            assert llm.provider == "deepseek"
-            assert llm.model == "deepseek-chat"
+    def test_create_deepseek(self, monkeypatch):
+        monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
+        llm = LLMFactory.create("deepseek")
+        assert llm.provider == "deepseek"
+        assert llm.model == "deepseek-chat"
+        assert llm.api_key == "test-key"
 
-    def test_create_zhipu(self):
-        with patch("config.settings.settings") as mock_s:
-            mock_s.ZHIPU_API_KEY = "test"
-            mock_s.DEFAULT_LLM_PROVIDER = "zhipu"
-            llm = LLMFactory.create("zhipu")
-            assert llm.provider == "zhipu"
+    def test_create_zhipu(self, monkeypatch):
+        monkeypatch.setattr(settings, "ZHIPU_API_KEY", "test-key")
+        monkeypatch.setattr(settings, "DEFAULT_LLM_PROVIDER", "zhipu")
+        llm = LLMFactory.create()
+        assert llm.provider == "zhipu"
+        assert llm.api_key == "test-key"
 
-    def test_create_ollama(self):
-        with patch("config.settings.settings") as mock_s:
-            mock_s.OLLAMA_BASE_URL = "http://localhost:11434"
-            mock_s.OLLAMA_MODEL = "qwen2.5:7b"
-            llm = LLMFactory.create("ollama")
-            assert llm.provider == "ollama"
-            assert llm.is_local is True
+    def test_create_ollama(self, monkeypatch):
+        monkeypatch.setattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434")
+        monkeypatch.setattr(settings, "OLLAMA_MODEL", "qwen2.5:7b")
+        llm = LLMFactory.create("ollama")
+        assert llm.provider == "ollama"
+        assert llm.is_local is True
 
-    def test_create_lmstudio(self):
-        with patch("config.settings.settings") as mock_s:
-            mock_s.LMSTUDIO_BASE_URL = "http://localhost:1234"
-            mock_s.LMSTUDIO_MODEL = ""
-            # 服务未启动时自动发现返回空，不应崩溃
-            llm = LLMFactory.create("lmstudio")
-            assert llm.provider == "lmstudio"
-            assert llm.is_local is True
-            assert "/v1" in llm.base_url
+    def test_create_lmstudio(self, monkeypatch):
+        monkeypatch.setattr(settings, "LMSTUDIO_BASE_URL", "http://localhost:1234")
+        monkeypatch.setattr(settings, "LMSTUDIO_MODEL", "")
+        llm = LLMFactory.create("lmstudio")
+        assert llm.provider == "lmstudio"
+        assert llm.is_local is True
+        assert llm.base_url == "http://localhost:1234/v1"
 
-    def test_lmstudio_explicit_model(self):
-        with patch("config.settings.settings") as mock_s:
-            mock_s.LMSTUDIO_BASE_URL = "http://localhost:1234"
-            mock_s.LMSTUDIO_MODEL = "qwen2.5-7b"
-            llm = LLMFactory.create("lmstudio", "qwen2.5-7b")
-            assert llm.model == "qwen2.5-7b"
+    def test_lmstudio_explicit_model(self, monkeypatch):
+        monkeypatch.setattr(settings, "LMSTUDIO_MODEL", "default-model")
+        llm = LLMFactory.create("lmstudio", "qwen2.5-7b")
+        assert llm.model == "qwen2.5-7b"
 
     def test_create_unknown_raises(self):
         with pytest.raises(ValueError):

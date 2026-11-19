@@ -2,8 +2,6 @@
 """OpenAI 兼容 LLM 测试：max_tokens 透传、429 限流友好提示、Function Calling 降级。"""
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from llm.openai_llm import OpenAICompatibleLLM
 
 
@@ -109,6 +107,3 @@ class TestOpenAICompatibleLLM:
         assert calls["n"] == 2
         assert "纯对话回答" in resp.content
         assert "不支持工具调用" in resp.content
-
-    def test_unknown_tool_name_no_side_effect(self):
-        pass  # 占位：工具名不匹配逻辑在 ReActAgent 层覆盖

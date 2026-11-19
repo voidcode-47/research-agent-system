@@ -113,10 +113,13 @@ class LLMGateway:
             raise ValueError(f"不允许的 LLM 任务类型：{task_type}")
         limit = min(int(max_tokens or task["max_tokens"]), int(task["max_tokens"]))
 
-        # 先检查再消耗：超限时不发起模型调用；管理员不限额度且不占用普通用户配额
+        # consume 在锁内检查并扣减，超限时不发起模型调用；管理员不占用配额
         unlimited = auth.is_admin()
-        quota.check(self.quota_key, unlimited=unlimited)
         quota.consume(self.quota_key, unlimited=unlimited)
+        charged = not unlimited
+        # 一次逻辑调用只扣一次；真正的模型输出（即便 JSON 不合格）计入额度，
+        # 提供商报错、限流或连接失败等没有可用输出的情况在最终失败时退还。
+        completion_received = False
 
         msgs = list(messages)
         last_err: Exception | None = None
@@ -126,6 +129,8 @@ class LLMGateway:
             try:
                 resp = self.llm.chat(msgs, temperature=temperature, max_tokens=limit)
                 content = getattr(resp, "content", "") or ""
+                if not _provider_error(content):
+                    completion_received = True
                 data = extract_json(content) if expect_json else content
                 if expect_json and data is None:
                     if _provider_error(content):
@@ -143,6 +148,8 @@ class LLMGateway:
                 self._audit(task_type, paper_id, resp, started, True)
                 return data
             except _ModelCallFailed:
+                if charged and not completion_received:
+                    self._refund()
                 raise
             except Exception as e:
                 last_err = e
@@ -155,7 +162,15 @@ class LLMGateway:
                             "。请严格只输出一个合法 JSON 对象，字段按要求返回。"
                         ),
                     }]
+        if charged and not completion_received:
+            self._refund()
         raise RuntimeError(f"模型任务 {task_type} 执行失败：{last_err}")
+
+    def _refund(self) -> None:
+        try:
+            quota.refund(self.quota_key)
+        except Exception as e:
+            logger.warning(f"配额退还失败: {e}")
 
     def _audit(self, task_type: str, paper_id: str, resp, started: float,
                ok: bool, error: str = "") -> None:

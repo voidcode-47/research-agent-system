@@ -3,17 +3,27 @@
 契约见任务说明第六节；任务采用后台线程 + 内存 dict 轮询，
 写法与 server.py 的 RESEARCH_TASKS 保持一致（含上限裁剪）。
 """
+import asyncio
 import datetime
+import json
 import os
+import queue
 import re
 import shutil
+import tempfile
 import threading
 import uuid
 from urllib.parse import quote
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    Response,
+    StreamingResponse,
+)
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from config.paper import (
     DEFAULT_FORMAT,
@@ -30,8 +40,8 @@ from config.prompts import PAPER_QA_PROMPT
 from config.settings import settings
 from llm.factory import LLMFactory
 from llm.gateway import LLMGateway
-from paper import store
-from paper.analysis import DiagnosisCancelled, diagnose, total_score
+from paper import backup, store
+from paper.analysis import DiagnosisCancelled, DiagnosisStale, diagnose, total_score
 from paper.export import export_docx, export_pdf, export_summary_docx
 from paper.parser import (
     ParseCancelled,
@@ -42,6 +52,7 @@ from paper.parser import (
 )
 from paper.rewrite import (
     apply_rewrite,
+    apply_rewrites,
     generate_guideline,
     guideline_text,
     rewrite_paragraph,
@@ -58,9 +69,28 @@ router = APIRouter(prefix="/api/paper", tags=["paper"])
 MAX_UPLOAD_MB = 50
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 MAX_PAPER_TASKS = 100
+TASK_WORKERS = settings.PAPER_TASK_WORKERS
+MAX_ACTIVE_TASKS = settings.PAPER_MAX_ACTIVE_TASKS
+TASK_RETENTION_MINUTES = settings.PAPER_TASK_RETENTION_MINUTES
+_JOURNAL_NAME = "_task_journal.json"
+_JOURNAL_VERSION = 1
+_INTERRUPTED = "服务重启导致任务中断，请重新发起"
 _TERMINAL = ("done", "error", "cancelled")
 
 PAPER_TASKS: dict[str, dict] = {}
+_TASK_LOCK = threading.RLock()
+_DELETING_PAPERS: set[str] = set()
+_TASK_QUEUE: queue.Queue = queue.Queue(maxsize=MAX_ACTIVE_TASKS)
+_worker_lock = threading.Lock()
+_workers_started = False
+
+
+class TaskQueueFull(Exception):
+    """活动任务已达到上限，拒绝新任务。"""
+
+
+class PaperUnavailable(Exception):
+    """论文不存在或正在删除，拒绝登记新的后台任务。"""
 
 
 # ---------------------------------------------------------------------------
@@ -104,10 +134,20 @@ class RewriteBatchBody(BaseModel):
 class ApplyBody(BaseModel):
     paragraph_id: str
     revised: str
+    expected_version: int | None = None
+    expected_original: str | None = None
+
+
+class ApplyBatchBody(BaseModel):
+    items: list[ApplyBody] = Field(default_factory=list)
 
 
 class AskBody(BaseModel):
     question: str
+
+
+class VersionCleanupBody(BaseModel):
+    keep_recent: int = Field(default=5, ge=0, le=100)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +162,16 @@ def _paper_or_404(paper_id: str) -> dict:
         return store.load_meta(paper_id)
     except (ValueError, FileNotFoundError):
         raise HTTPException(404, "论文不存在或已被删除")
+
+
+def _conflict_response(e: store.VersionConflict) -> JSONResponse:
+    return JSONResponse(status_code=409, content={
+        "detail": str(e),
+        "conflict": True,
+        "reason": e.reason,
+        "current_version": e.current_version,
+        "expected_version": e.expected_version,
+    })
 
 
 def _confirmed_requirement(paper_id: str) -> dict:
@@ -149,21 +199,122 @@ def _create_llm():
     return LLMFactory.create(None, None)
 
 
-def _spawn(fn, *args) -> None:
-    """后台线程启动（测试可替换为同步执行）；继承发起请求的管理员身份。"""
+def _hm() -> str:
+    return datetime.datetime.now().strftime("%H:%M:%S")
+
+
+def _ensure_workers() -> None:
+    global _workers_started
+    with _worker_lock:
+        if _workers_started:
+            return
+        for idx in range(TASK_WORKERS):
+            threading.Thread(
+                target=_task_loop, name=f"paper-task-{idx}", daemon=True
+            ).start()
+        _workers_started = True
+
+
+def _task_loop() -> None:
+    while True:
+        task_id, runner = _TASK_QUEUE.get()
+        try:
+            _run_task(task_id, runner)
+        except Exception:
+            logger.exception("论文后台任务调度异常")
+        finally:
+            _TASK_QUEUE.task_done()
+
+
+def _call_cleanup(cleanup) -> None:
+    try:
+        cleanup()
+    except Exception as e:
+        logger.warning(f"任务取消清理失败: {e}")
+
+
+def _run_task(task_id: str, runner) -> None:
+    cleanup = None
+    with _TASK_LOCK:
+        task = PAPER_TASKS.get(task_id)
+        if not task:
+            return
+        if task.get("status") in _TERMINAL or task.get("cancel_requested"):
+            if task.get("status") not in _TERMINAL:
+                _finish(task, "cancelled", message="已取消，任务未执行")
+            run = False
+        else:
+            task["status"] = "running"
+            task["stage"] = "starting"
+            task["started_at"] = _now()
+            task["updated_at"] = _hm()
+            run = True
+        cleanup = task.pop("cleanup", None)
+    if not run:
+        if cleanup:
+            _call_cleanup(cleanup)
+        return
+    try:
+        runner()
+    except Exception as e:
+        logger.exception("论文后台任务失败")
+        _fail(task, e)
+    finally:
+        with _TASK_LOCK:
+            if task.get("status") not in _TERMINAL:
+                _finish(task, "error", error="任务异常结束（内部错误）",
+                        message="失败：任务异常结束（内部错误）",
+                        cancel_wins=True, cancel_message="已取消")
+
+
+def _spawn(task_id: str, fn, *args) -> None:
+    """提交到有界队列；守护线程继承发起请求的管理员身份与额度预留。"""
     admin = auth.is_admin()
 
     def runner():
-        token = auth.set_admin(admin)
+        with _TASK_LOCK:
+            task = PAPER_TASKS.get(task_id)
+            quota_token = task.get("quota_token") if task else None
+        auth_token = auth.set_admin(admin)
+        context_token = quota.set_reservation(quota_token)
         try:
             fn(*args)
         finally:
-            auth.reset_admin(token)
+            quota.reset_reservation(context_token)
+            auth.reset_admin(auth_token)
 
-    threading.Thread(target=runner, daemon=True).start()
+    _ensure_workers()
+    try:
+        _TASK_QUEUE.put_nowait((task_id, runner))
+    except queue.Full:
+        with _TASK_LOCK:
+            task = PAPER_TASKS.get(task_id)
+            cleanup = task.pop("cleanup", None) if task else None
+        if cleanup:
+            _call_cleanup(cleanup)
+        if task:
+            _fail(task, TaskQueueFull("任务队列已满，请稍后重试"))
+        raise TaskQueueFull("任务队列已满，请稍后重试")
 
 
-def _prune_tasks() -> None:
+def _task_timestamp(task: dict) -> datetime.datetime | None:
+    raw = task.get("finished_at") or task.get("created_at")
+    try:
+        return datetime.datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S")
+    except (TypeError, ValueError):
+        return None
+
+
+def _prune_locked() -> None:
+    if TASK_RETENTION_MINUTES > 0:
+        cutoff = (datetime.datetime.now()
+                  - datetime.timedelta(minutes=TASK_RETENTION_MINUTES))
+        for tid, task in list(PAPER_TASKS.items()):
+            if task.get("status") not in _TERMINAL:
+                continue
+            finished = _task_timestamp(task)
+            if finished is not None and finished < cutoff:
+                PAPER_TASKS.pop(tid, None)
     if len(PAPER_TASKS) <= MAX_PAPER_TASKS:
         return
     stale = sorted(
@@ -175,36 +326,350 @@ def _prune_tasks() -> None:
         PAPER_TASKS.pop(tid, None)
 
 
-def _new_task(kind: str, paper_id: str) -> str:
-    task_id = uuid.uuid4().hex[:12]
-    _prune_tasks()
-    PAPER_TASKS[task_id] = {
-        "id": task_id,
-        "kind": kind,
-        "paper_id": paper_id,
-        "status": "running",
-        "stage": "starting",
-        "progress": 0,
-        "cancel_requested": False,
-        "logs": [],
-        "report": None,
-        "error": None,
-        "created_at": _now(),
-        "updated_at": "",
+def task_journal_path() -> str:
+    """活动任务日志路径；位于论文数据根目录，不参与论文索引。"""
+    return os.path.join(store.root_dir(), _JOURNAL_NAME)
+
+
+def _journal_record(task: dict) -> dict:
+    return {
+        "id": task.get("id"),
+        "kind": task.get("kind", ""),
+        "paper_id": task.get("paper_id", ""),
+        "status": task.get("status", ""),
+        "created_at": task.get("created_at", ""),
+        "updated_at": task.get("updated_at", ""),
     }
-    return task_id
+
+
+def _save_task_journal_locked() -> None:
+    """只记录非终态任务的最小元数据，不写入正文、结果或清理函数。"""
+    payload = {
+        "version": _JOURNAL_VERSION,
+        "saved_at": _now(),
+        "tasks": [
+            _journal_record(task)
+            for task in PAPER_TASKS.values()
+            if task.get("status") not in _TERMINAL
+        ],
+    }
+    try:
+        store.write_json_file(task_journal_path(), payload)
+    except Exception as e:
+        logger.warning(f"任务日志写入失败，任务继续执行: {e}")
+
+
+def restore_task_journal() -> int:
+    """服务启动时把上次未完成的任务标记为失败，并清空活动日志。"""
+    data = store.read_json_file(task_journal_path(), None)
+    if data is None:
+        return 0
+    if not isinstance(data, dict) or data.get("version") != _JOURNAL_VERSION:
+        logger.warning("任务日志格式不兼容，已忽略")
+        return 0
+    items = data.get("tasks")
+    if not isinstance(items, list):
+        logger.warning("任务日志缺少有效任务列表，已忽略")
+        return 0
+    restored = 0
+    now = _now()
+    with _TASK_LOCK:
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            task_id = item.get("id")
+            if not isinstance(task_id, str) or not re.fullmatch(
+                    r"[0-9a-f]{12}", task_id):
+                continue
+            if task_id in PAPER_TASKS:
+                continue
+            kind = item.get("kind")
+            paper_id = item.get("paper_id")
+            created_at = item.get("created_at")
+            PAPER_TASKS[task_id] = {
+                "id": task_id,
+                "kind": kind if isinstance(kind, str) else "",
+                "paper_id": paper_id if isinstance(paper_id, str) else "",
+                "key": "",
+                "cleanup": None,
+                "status": "error",
+                "stage": "error",
+                "progress": 0,
+                "cancel_requested": False,
+                "logs": [_INTERRUPTED],
+                "report": None,
+                "error": _INTERRUPTED,
+                "created_at": (created_at if isinstance(created_at, str)
+                               and created_at else now),
+                "updated_at": _hm(),
+                "finished_at": now,
+            }
+            restored += 1
+        _prune_locked()
+        _save_task_journal_locked()
+    if restored:
+        logger.warning(f"已恢复 {restored} 个中断任务，状态标记为失败")
+    return restored
+
+
+def _reserve_task(kind: str, paper_id: str, key: str = "",
+                  cleanup=None) -> tuple[str, bool]:
+    """分配任务 ID；相同 kind/paper/key 的活动任务直接复用。"""
+    with _TASK_LOCK:
+        if paper_id in _DELETING_PAPERS:
+            raise PaperUnavailable("论文不存在或正在删除，请稍后重试")
+        if kind != "upload" and re.fullmatch(r"p_[0-9a-f]{12}", paper_id):
+            try:
+                store.load_meta(paper_id)
+            except (ValueError, FileNotFoundError) as e:
+                raise PaperUnavailable("论文不存在或已被删除") from e
+        _prune_locked()
+        if key:
+            for task in PAPER_TASKS.values():
+                if (task.get("status") not in _TERMINAL
+                        and task.get("kind") == kind
+                        and task.get("paper_id") == paper_id
+                        and task.get("key") == key):
+                    return task["id"], False
+        active = sum(
+            1 for task in PAPER_TASKS.values()
+            if task.get("status") not in _TERMINAL
+        )
+        if active >= MAX_ACTIVE_TASKS:
+            raise TaskQueueFull(
+                f"当前已有 {active} 个任务在排队或运行，请等待完成后再试"
+            )
+        task_id = uuid.uuid4().hex[:12]
+        PAPER_TASKS[task_id] = {
+            "id": task_id,
+            "kind": kind,
+            "paper_id": paper_id,
+            "key": key,
+            "cleanup": cleanup,
+            "status": "queued",
+            "stage": "queued",
+            "progress": 0,
+            "cancel_requested": False,
+            "logs": [],
+            "report": None,
+            "error": None,
+            "created_at": _now(),
+            "updated_at": _hm(),
+        }
+        _save_task_journal_locked()
+        return task_id, True
+
+
+def _new_task(kind: str, paper_id: str, key: str = "",
+              cleanup=None) -> str:
+    return _reserve_task(kind, paper_id, key, cleanup)[0]
+
+
+def _find_task(kind: str, paper_id: str, key: str) -> str | None:
+    if not key:
+        return None
+    with _TASK_LOCK:
+        for task in PAPER_TASKS.values():
+            if (task.get("status") not in _TERMINAL
+                    and task.get("kind") == kind
+                    and task.get("paper_id") == paper_id
+                    and task.get("key") == key):
+                return task["id"]
+    return None
+
+
+def _launch(kind: str, paper_id: str, key: str, fn, *args,
+            cleanup=None, quota_amount: int = 0,
+            quota_unlimited: bool = False) -> str:
+    """创建任务并预留额度；相同任务复用时不重复预留。
+
+    预留额度在任务终态释放；模型调用失败时由网关退回到该任务的预留中。
+    """
+    # 删除闸门必须先于活动任务复用检查，避免返回正在被删除的旧任务。
+    with _TASK_LOCK:
+        if paper_id in _DELETING_PAPERS:
+            raise HTTPException(404, "论文不存在或正在删除，请稍后重试")
+    existing = _find_task(kind, paper_id, key)
+    if existing:
+        return existing
+    token = None
+    owned = False
+    try:
+        token = quota.reserve(quota_amount, unlimited=quota_unlimited)
+        task_id, created = _reserve_task(kind, paper_id, key, cleanup)
+        owned = True
+        if not created:
+            quota.release(token)
+            return task_id
+        with _TASK_LOCK:
+            task = PAPER_TASKS.get(task_id)
+            if task is not None and task.get("status") not in _TERMINAL:
+                task["quota_token"] = token
+            else:
+                quota.release(token)
+                token = None
+        _spawn(task_id, fn, task_id, paper_id, *args)
+        return task_id
+    except quota.QuotaExceeded as e:
+        quota.release(token)
+        if cleanup:
+            _call_cleanup(cleanup)
+        raise HTTPException(429, str(e))
+    except TaskQueueFull:
+        quota.release(token)
+        if cleanup and not owned:
+            _call_cleanup(cleanup)
+        raise HTTPException(429, "任务队列已满，请等待已有任务完成后再试")
+    except PaperUnavailable as e:
+        quota.release(token)
+        if cleanup:
+            _call_cleanup(cleanup)
+        raise HTTPException(404, str(e))
 
 
 def _log(task: dict, stage: str, msg: str) -> None:
-    task["stage"] = stage
-    task["logs"].append(msg)
-    task["updated_at"] = datetime.datetime.now().strftime("%H:%M:%S")
+    with _TASK_LOCK:
+        if task.get("status") in _TERMINAL:
+            return
+        task["stage"] = stage
+        task["logs"].append(msg)
+        task["updated_at"] = _hm()
 
 
-def _fail(task: dict, err: Exception) -> None:
-    task["status"] = "error"
-    task["error"] = str(err)
-    _log(task, "error", f"失败：{err}")
+def _finish(task: dict, status: str, *, stage: str | None = None,
+            message: str | None = None, progress: int | None = None,
+            error: str | None = None, cancel_wins: bool = False,
+            cancel_message: str = "已取消", **fields) -> bool:
+    with _TASK_LOCK:
+        if task.get("status") in _TERMINAL:
+            return False
+        if cancel_wins and task.get("cancel_requested"):
+            status = "cancelled"
+            fields = {}
+            message = cancel_message
+            error = None
+        if status == "cancelled":
+            stage = stage or "cancelled"
+            error = None
+        elif status == "done":
+            stage = stage or "done"
+            error = None
+        elif status == "error":
+            stage = stage or "error"
+        task.update(fields)
+        task["status"] = status
+        task["stage"] = stage or task.get("stage", "")
+        if progress is not None:
+            task["progress"] = max(0, min(100, int(progress)))
+        task["error"] = str(error) if error is not None else None
+        if message:
+            task["logs"].append(message)
+        task["updated_at"] = _hm()
+        task["finished_at"] = _now()
+        quota_token = task.pop("quota_token", None)
+        _save_task_journal_locked()
+    quota.release(quota_token)
+    return True
+
+
+def _fail(task: dict, err: Exception, *, cancel_wins: bool = False,
+          cancel_message: str = "已取消") -> None:
+    _finish(task, "error", error=str(err), message=f"失败：{err}",
+            cancel_wins=cancel_wins, cancel_message=cancel_message)
+
+
+def _cancel_task(task: dict, *, immediate: bool = False,
+                 message: str = "已取消") -> bool:
+    cleanup = None
+    quota_token = None
+    with _TASK_LOCK:
+        if task.get("status") in _TERMINAL:
+            return False
+        task["cancel_requested"] = True
+        if task.get("status") == "queued" or immediate:
+            task["status"] = "cancelled"
+            task["stage"] = "cancelled"
+            task["error"] = None
+            task["logs"].append(message)
+            task["updated_at"] = _hm()
+            task["finished_at"] = _now()
+            cleanup = task.pop("cleanup", None)
+            quota_token = task.pop("quota_token", None)
+            _save_task_journal_locked()
+        else:
+            _log(task, "cancelling", message)
+    quota.release(quota_token)
+    if cleanup:
+        _call_cleanup(cleanup)
+    return True
+
+
+def _task_view(task: dict, fields: tuple[str, ...] = ()) -> dict:
+    with _TASK_LOCK:
+        data = {
+            "status": task.get("status"),
+            "stage": task.get("stage", ""),
+            "progress": int(task.get("progress") or 0),
+            "cancel_requested": bool(task.get("cancel_requested")),
+            "logs": list(task.get("logs") or []),
+            "error": task.get("error"),
+            "created_at": task.get("created_at", ""),
+            "updated_at": task.get("updated_at", ""),
+        }
+        for name in fields:
+            data[name] = task.get(name)
+        return data
+
+
+def _cancel_response(task: dict) -> dict:
+    view = _task_view(task)
+    return {
+        "status": view["status"],
+        "cancel_requested": view["cancel_requested"],
+        "progress": view["progress"],
+    }
+
+
+@router.get("/{paper_id}/tasks/{task_id}/events")
+async def api_task_events(paper_id: str, task_id: str, request: Request):
+    """以 SSE 推送任务状态；终态发送 event:end 后关闭。
+
+    浏览器断线或服务重启时由前端回退到原有单次状态查询，避免长连接
+    成为唯一的状态来源。
+    """
+    task = PAPER_TASKS.get(task_id)
+    if not task or task.get("paper_id") != paper_id:
+        raise HTTPException(404, "任务不存在或已因服务重启失效，请重新发起")
+
+    async def stream():
+        last = None
+        while True:
+            if await request.is_disconnected():
+                return
+            current = PAPER_TASKS.get(task_id)
+            if not current:
+                yield "event: gone\ndata: {}\n\n"
+                return
+            view = _task_view(
+                current, ("paper_id", "report", "result", "guideline")
+            )
+            payload = json.dumps(view, ensure_ascii=False, separators=(",", ":"))
+            if payload != last:
+                yield f"data: {payload}\n\n"
+                last = payload
+            if view.get("status") in _TERMINAL:
+                yield "event: end\ndata: {}\n\n"
+                return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _attachment_header(filename: str) -> str:
@@ -212,6 +677,13 @@ def _attachment_header(filename: str) -> str:
     ext = os.path.splitext(filename)[1]
     ascii_name = f"download{ext}"
     return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(filename)}"
+
+
+def _remove_quietly(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def _paper_stem(meta: dict) -> str:
@@ -293,12 +765,21 @@ def api_options(request: Request):
             {"value": k, "label": v} for k, v in REWRITE_MODES.items()
         ],
         "quota": quota.usage_snapshot(unlimited=unlimited),
+        "tasks": {
+            "workers": TASK_WORKERS,
+            "max_active": MAX_ACTIVE_TASKS,
+            "retention_minutes": TASK_RETENTION_MINUTES,
+        },
     }
 
 
 @router.get("")
-def api_list_papers():
-    return {"papers": store.list_papers()}
+def api_list_papers(
+    q: str = Query("", max_length=200, description="按标题、文件名或论文 ID 搜索"),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+):
+    return store.search_papers(q, offset, limit)
 
 
 # ---------------------------------------------------------------------------
@@ -343,28 +824,31 @@ def _upload_worker(task_id: str, paper_id: str, paper_dir: str,
             "status": "uploaded",
             "current_version": 0,
         }
-        store.save_meta(paper_id, meta)
-        store.save_parsed(paper_id, parsed)
-        version = store.save_version(paper_id, parsed["paragraphs"], note="上传解析")
-
-        task["report"] = {
-            "paper_id": paper_id,
-            "title": parsed["title"],
-            "pages": parsed["pages"],
-            "chars": parsed["text_chars"],
-            "sections": parsed["sections"],
-            "section_count": len(parsed["sections"]),
-            "paragraph_count": len(parsed["paragraphs"]),
-            "version": version,
-            "suggestion": _suggest_requirement(parsed),
-        }
-        task["progress"] = 100
-        _log(task, "done", f"解析完成：{parsed['title']}")
-        task["status"] = "done"
+        with _TASK_LOCK:
+            if task.get("cancel_requested") or task.get("status") in _TERMINAL:
+                raise ParseCancelled("解析已取消")
+            with store.locked():
+                store.save_meta(paper_id, meta)
+                store.save_parsed(paper_id, parsed)
+                version = store.save_version(
+                    paper_id, parsed["paragraphs"], note="上传解析"
+                )
+            report = {
+                "paper_id": paper_id,
+                "title": parsed["title"],
+                "pages": parsed["pages"],
+                "chars": parsed["text_chars"],
+                "sections": parsed["sections"],
+                "section_count": len(parsed["sections"]),
+                "paragraph_count": len(parsed["paragraphs"]),
+                "version": version,
+                "suggestion": _suggest_requirement(parsed),
+            }
+            _finish(task, "done", progress=100,
+                    message=f"解析完成：{parsed['title']}", report=report)
     except ParseCancelled:
         shutil.rmtree(paper_dir, ignore_errors=True)
-        task["status"] = "cancelled"
-        _log(task, "cancelled", "已取消上传解析，未保存该论文")
+        _finish(task, "cancelled", message="已取消上传解析，未保存该论文")
     except Exception as e:
         shutil.rmtree(paper_dir, ignore_errors=True)
         logger.exception("论文解析失败")
@@ -405,9 +889,11 @@ def api_upload(file: UploadFile = File(...)):
         logger.exception("保存上传文件失败")
         raise HTTPException(500, f"保存上传文件失败：{e}")
 
-    task_id = _new_task("upload", paper_id)
-    _spawn(_upload_worker, task_id, paper_id, paper_dir, original_path,
-           filename, source_type)
+    task_id = _launch(
+        "upload", paper_id, "", _upload_worker,
+        paper_dir, original_path, filename, source_type,
+        cleanup=lambda: shutil.rmtree(paper_dir, ignore_errors=True),
+    )
     return {"task_id": task_id, "paper_id": paper_id, "source_type": source_type}
 
 
@@ -415,30 +901,45 @@ def api_upload(file: UploadFile = File(...)):
 def api_upload_status(task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("kind") != "upload":
-        raise HTTPException(404, "上传任务不存在")
-    return {
-        "status": task["status"],
-        "stage": task["stage"],
-        "progress": int(task.get("progress") or 0),
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "logs": task["logs"],
-        "paper_id": task.get("paper_id", ""),
-        "report": task.get("report"),
-        "error": task.get("error"),
-    }
+        raise HTTPException(404, "上传任务不存在或已因服务重启失效，请重新上传")
+    return _task_view(task, ("paper_id", "report"))
 
 
 @router.post("/upload/{task_id}/cancel")
 def api_upload_cancel(task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("kind") != "upload":
-        raise HTTPException(404, "上传任务不存在")
-    if task["status"] == "running" and not task.get("cancel_requested"):
-        task["cancel_requested"] = True
-        _log(task, "cancelling", "收到取消请求，正在中止解析…")
-    return {"status": task["status"],
-            "cancel_requested": bool(task.get("cancel_requested")),
-            "progress": int(task.get("progress") or 0)}
+        raise HTTPException(404, "上传任务不存在或已因服务重启失效，请重新上传")
+    _cancel_task(task, message="收到取消请求，正在中止解析…")
+    return _cancel_response(task)
+
+
+@router.post("/restore")
+def api_restore(file: UploadFile = File(...)):
+    """从备份 zip 恢复为新论文；不覆盖现有论文。"""
+    filename = os.path.basename(file.filename or "")
+    if not filename.lower().endswith(".zip"):
+        raise HTTPException(415, "仅支持本应用导出的 .zip 备份文件")
+    try:
+        file.file.seek(0, os.SEEK_END)
+        size = file.file.tell()
+        file.file.seek(0)
+    except OSError:
+        raise HTTPException(400, "无法读取上传的备份文件")
+    if size <= 0:
+        raise HTTPException(400, "备份文件为空")
+    if size > backup.MAX_BACKUP_UPLOAD_BYTES:
+        raise HTTPException(413, "备份文件超过 200MB 上限")
+    try:
+        result = backup.restore_backup_archive(file.file)
+    except backup.BackupError as e:
+        raise HTTPException(400, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.exception("恢复备份失败")
+        raise HTTPException(500, f"恢复备份失败：{e}")
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +967,7 @@ def api_paper_detail(paper_id: str):
             suggestion = _suggest_requirement(store.load_parsed(paper_id))
         except Exception:
             suggestion = None
+    versions = store.list_versions(paper_id)
     return {
         **meta,
         "requirement": requirement or {**DEFAULT_REQUIREMENT, "confirmed": False},
@@ -474,7 +976,8 @@ def api_paper_detail(paper_id: str):
         "analysis": analysis,
         "analysis_results": analysis_results,
         "total_score": total_score(paper_id),
-        "version_count": len(store.list_versions(paper_id)),
+        "version_count": len(versions),
+        "archived_count": sum(1 for v in versions if v.get("archived")),
     }
 
 
@@ -591,25 +1094,27 @@ def _diagnose_worker(task_id: str, paper_id: str, dimensions: list[str]) -> None
             paper_id, llm, dimensions, progress=progress,
             should_cancel=lambda: bool(task.get("cancel_requested")),
         )
-        task["report"] = report
         if report.get("errors") and not report.get("dimensions"):
             # 所有维度都失败：任务标记为失败，前端直接展示原因（如配额耗尽）
             _fail(task, RuntimeError("诊断失败：" + "；".join(report["errors"].values())))
             return
-        task["progress"] = 100
         if report.get("errors"):
-            _log(task, "done", "诊断完成（部分维度失败，可重试）：" + "；".join(report["errors"].values()))
+            message = ("诊断完成（部分维度失败，可重试）："
+                       + "；".join(report["errors"].values()))
         else:
-            _log(task, "done", f"诊断完成，总分 {report.get('total_score')}")
-        task["status"] = "done"
+            message = f"诊断完成，总分 {report.get('total_score')}"
+        _finish(task, "done", progress=100, message=message, report=report)
     except DiagnosisCancelled:
-        _log(task, "cancelled", "诊断已取消，已完成维度的结果会保留")
-        task["status"] = "cancelled"
+        _finish(task, "cancelled",
+                message="诊断已取消，已完成维度的结果会保留")
+    except DiagnosisStale as e:
+        _fail(task, e, cancel_wins=True,
+              cancel_message="论文已删除，诊断任务已取消")
     except quota.QuotaExceeded as e:
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True)
     except Exception as e:
         logger.exception("论文诊断任务失败")
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True)
 
 
 @router.post("/{paper_id}/diagnose")
@@ -620,12 +1125,12 @@ def api_start_diagnose(paper_id: str, body: DiagnoseBody, request: Request):
     bad = [d for d in dims if d not in DIAGNOSIS_DIMENSIONS]
     if bad:
         raise HTTPException(400, f"未知诊断维度：{', '.join(bad)}")
-    try:
-        quota.check(unlimited=bool(getattr(request.state, "admin_user", "")))
-    except quota.QuotaExceeded as e:
-        raise HTTPException(429, str(e))
-    task_id = _new_task("diagnose", paper_id)
-    _spawn(_diagnose_worker, task_id, paper_id, dims)
+    key = "diagnose:" + ",".join(sorted(dims))
+    task_id = _launch(
+        "diagnose", paper_id, key, _diagnose_worker, dims,
+        quota_amount=len(dims),
+        quota_unlimited=bool(getattr(request.state, "admin_user", "")),
+    )
     return {"task_id": task_id}
 
 
@@ -633,34 +1138,18 @@ def api_start_diagnose(paper_id: str, body: DiagnoseBody, request: Request):
 def api_diagnose_status(paper_id: str, task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("paper_id") != paper_id:
-        raise HTTPException(404, "诊断任务不存在")
-    return {
-        "status": task["status"],
-        "stage": task["stage"],
-        "progress": int(task.get("progress") or 0),
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "logs": task["logs"],
-        "report": task.get("report"),
-        "error": task.get("error"),
-        "created_at": task["created_at"],
-        "updated_at": task.get("updated_at", ""),
-    }
+        raise HTTPException(404, "诊断任务不存在或已因服务重启失效，请重新发起")
+    return _task_view(task, ("report",))
 
 
 @router.post("/{paper_id}/diagnose/{task_id}/cancel")
 def api_cancel_diagnose(paper_id: str, task_id: str):
-    """请求取消诊断：置标志位，任务在当前维度结束后停止。"""
+    """请求取消诊断：queued 立即取消，running 在当前维度结束后停止。"""
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("paper_id") != paper_id:
-        raise HTTPException(404, "诊断任务不存在")
-    if task["status"] == "running" and not task.get("cancel_requested"):
-        task["cancel_requested"] = True
-        _log(task, "cancelling", "收到取消请求，当前维度完成后停止")
-    return {
-        "status": task["status"],
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "progress": int(task.get("progress") or 0),
-    }
+        raise HTTPException(404, "诊断任务不存在或已因服务重启失效，请重新发起")
+    _cancel_task(task, message="收到取消请求，当前维度完成后停止")
+    return _cancel_response(task)
 
 
 # ---------------------------------------------------------------------------
@@ -684,27 +1173,26 @@ def _similar_worker(task_id: str, paper_id: str, limit: int, refresh: bool) -> N
             progress=progress,
             should_cancel=lambda: bool(task.get("cancel_requested")),
         )
-        task["report"] = result
-        task["progress"] = 100
-        if result.get("items"):
-            _log(task, "done", f"找到 {len(result['items'])} 篇相似论文")
-        else:
-            _log(task, "done", result.get("error") or "未找到相似论文")
-        task["status"] = "done"
+        message = (f"找到 {len(result['items'])} 篇相似论文"
+                   if result.get("items")
+                   else (result.get("error") or "未找到相似论文"))
+        _finish(task, "done", progress=100, message=message, report=result,
+                cancel_wins=True, cancel_message="论文已删除，检索任务已取消")
     except SimilarCancelled:
-        task["status"] = "cancelled"
-        _log(task, "cancelled", "已取消相似论文检索")
+        _finish(task, "cancelled", message="已取消相似论文检索")
     except Exception as e:
         logger.exception("相似论文任务失败")
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True)
 
 
 @router.post("/{paper_id}/similar")
 def api_start_similar(paper_id: str, body: SimilarBody):
     _paper_or_404(paper_id)
-    task_id = _new_task("similar", paper_id)
     limit = max(1, min(int(body.limit or 10), 20))
-    _spawn(_similar_worker, task_id, paper_id, limit, bool(body.refresh))
+    key = f"similar:{limit}:{int(bool(body.refresh))}"
+    task_id = _launch(
+        "similar", paper_id, key, _similar_worker, limit, bool(body.refresh)
+    )
     return {"task_id": task_id}
 
 
@@ -712,15 +1200,9 @@ def api_start_similar(paper_id: str, body: SimilarBody):
 def api_cancel_similar(paper_id: str, task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("paper_id") != paper_id:
-        raise HTTPException(404, "检索任务不存在")
-    if task["status"] == "running" and not task.get("cancel_requested"):
-        task["cancel_requested"] = True
-        _log(task, "cancelling", "收到取消请求，当前检索请求完成后停止")
-    return {
-        "status": task["status"],
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "progress": int(task.get("progress") or 0),
-    }
+        raise HTTPException(404, "检索任务不存在或已因服务重启失效，请重新发起")
+    _cancel_task(task, message="收到取消请求，当前检索请求完成后停止")
+    return _cancel_response(task)
 
 
 @router.get("/{paper_id}/similar")
@@ -736,16 +1218,8 @@ def api_get_similar(paper_id: str):
 def api_similar_status(paper_id: str, task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("paper_id") != paper_id:
-        raise HTTPException(404, "相似论文任务不存在")
-    return {
-        "status": task["status"],
-        "stage": task["stage"],
-        "logs": task["logs"],
-        "report": task.get("report"),
-        "error": task.get("error"),
-        "created_at": task["created_at"],
-        "updated_at": task.get("updated_at", ""),
-    }
+        raise HTTPException(404, "相似论文任务不存在或已因服务重启失效，请重新发起")
+    return _task_view(task, ("report",))
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +1239,25 @@ def api_get_guideline(paper_id: str):
         "stale": int(guide.get("version") or 0) != current,
         "current_version": current,
     }
+
+
+def _commit_guideline(task: dict, paper_id: str, guide: dict) -> bool:
+    """在任务锁内完成取消检查、落盘与终态迁移，避免取消与完成互相覆盖。"""
+    with _TASK_LOCK:
+        if task.get("status") in _TERMINAL:
+            return False
+        if task.get("cancel_requested"):
+            _finish(task, "cancelled", message="已取消生成，本次结果不保存")
+            return False
+        try:
+            store.save_rewrite_guide(paper_id, guide)
+        except Exception as e:
+            logger.exception("全局改写方针保存失败")
+            _fail(task, e)
+            return False
+        _finish(task, "done", progress=100,
+                message="全局改写方针已生成", guideline=guide)
+        return True
 
 
 def _guideline_worker(task_id: str, paper_id: str, instruction: str,
@@ -808,27 +1301,14 @@ def _guideline_worker(task_id: str, paper_id: str, instruction: str,
             )
         finally:
             stop_tick.set()
-        if task.get("cancel_requested"):
-            task["status"] = "cancelled"
-            _log(task, "cancelled", "已取消生成，本次结果不保存")
-            return
-        store.save_rewrite_guide(paper_id, guide)
-        task["guideline"] = guide
-        task["progress"] = 100
-        _log(task, "done", "全局改写方针已生成")
-        task["status"] = "done"
+        _commit_guideline(task, paper_id, guide)
     except quota.QuotaExceeded as e:
-        if task.get("cancel_requested"):
-            task["status"] = "cancelled"
-            return
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True,
+              cancel_message="已取消生成，本次结果不保存")
     except Exception as e:
-        if task.get("cancel_requested"):
-            task["status"] = "cancelled"
-            _log(task, "cancelled", "已取消生成，本次结果不保存")
-            return
         logger.exception("全局改写方针生成失败")
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True,
+              cancel_message="已取消生成，本次结果不保存")
 
 
 @router.post("/{paper_id}/rewrite/guideline")
@@ -839,13 +1319,13 @@ def api_generate_guideline(paper_id: str, body: GuidelineBody, request: Request)
         g = gate(instruction, True)
         if not g["allowed"]:
             raise HTTPException(400, g["reply"])
-    try:
-        quota.check(unlimited=bool(getattr(request.state, "admin_user", "")))
-    except quota.QuotaExceeded as e:
-        raise HTTPException(429, str(e))
-    task_id = _new_task("guideline", paper_id)
-    _spawn(_guideline_worker, task_id, paper_id, instruction,
-           int(meta.get("current_version") or 0))
+    key = "guideline:" + instruction
+    task_id = _launch(
+        "guideline", paper_id, key, _guideline_worker, instruction,
+        int(meta.get("current_version") or 0),
+        quota_amount=1,
+        quota_unlimited=bool(getattr(request.state, "admin_user", "")),
+    )
     return {"task_id": task_id}
 
 
@@ -853,45 +1333,28 @@ def api_generate_guideline(paper_id: str, body: GuidelineBody, request: Request)
 def api_guideline_status(paper_id: str, task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("paper_id") != paper_id or task.get("kind") != "guideline":
-        raise HTTPException(404, "方针生成任务不存在")
-    return {
-        "status": task["status"],
-        "stage": task["stage"],
-        "progress": int(task.get("progress") or 0),
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "logs": task["logs"],
-        "guideline": task.get("guideline"),
-        "error": task.get("error"),
-        "created_at": task["created_at"],
-        "updated_at": task.get("updated_at", ""),
-    }
+        raise HTTPException(404, "方针生成任务不存在或已因服务重启失效，请重新发起")
+    return _task_view(task, ("guideline",))
 
 
 @router.post("/{paper_id}/rewrite/guideline/{task_id}/cancel")
 def api_cancel_guideline(paper_id: str, task_id: str):
-    """取消方针生成：立即标记取消，模型返回后丢弃结果、不保存。"""
+    """取消方针生成：立即标记取消；模型返回后丢弃结果、不保存。"""
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("paper_id") != paper_id or task.get("kind") != "guideline":
-        raise HTTPException(404, "方针生成任务不存在")
-    if task["status"] == "running" and not task.get("cancel_requested"):
-        task["cancel_requested"] = True
-        task["status"] = "cancelled"
-        _log(task, "cancelled", "已取消生成，本次结果不保存")
-    return {
-        "status": task["status"],
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "progress": int(task.get("progress") or 0),
-    }
+        raise HTTPException(404, "方针生成任务不存在或已因服务重启失效，请重新发起")
+    _cancel_task(task, immediate=True, message="已取消生成，本次结果不保存")
+    return _cancel_response(task)
 
 
-def _rewrite_target(paper_id: str, paragraph_id: str) -> dict:
-    paragraphs = store.current_paragraphs(paper_id)
+def _rewrite_target(paper_id: str, paragraph_id: str) -> tuple[int, dict]:
+    version, paragraphs = store.snapshot_current(paper_id)
     target = next((p for p in paragraphs if p.get("id") == paragraph_id), None)
     if target is None:
         raise HTTPException(404, "段落不存在")
     if len((target.get("text") or "").strip()) > 800:
         raise HTTPException(400, "单次改写最多 800 字，请先拆分该段落")
-    return target
+    return version, target
 
 
 def _rewrite_worker(task_id: str, paper_id: str, paragraph_id: str, mode: str,
@@ -906,7 +1369,7 @@ def _rewrite_worker(task_id: str, paper_id: str, paragraph_id: str, mode: str,
         task["progress"] = 10
         if cancelled():
             raise RuntimeError("__cancelled__")
-        target = _rewrite_target(paper_id, paragraph_id)
+        version, target = _rewrite_target(paper_id, paragraph_id)
         requirement = store.load_requirement(paper_id) or {}
         guide = store.load_rewrite_guide(paper_id) if use_guideline else None
         task["progress"] = 30
@@ -914,28 +1377,31 @@ def _rewrite_worker(task_id: str, paper_id: str, paragraph_id: str, mode: str,
         result = rewrite_paragraph(
             _create_llm(), target.get("text") or "", requirement,
             mode=mode, instruction=instruction, paper_id=paper_id,
-            guideline=guideline_text(guide) if guide else "",
+            guideline=guideline_text(guide) if guide else "", version=version,
         )
         if cancelled():
             raise RuntimeError("__cancelled__")
         result["paragraph_id"] = paragraph_id
-        task["result"] = result
-        task["progress"] = 100
-        _log(task, "done", "改写完成，请检查差异后决定是否保留")
-        task["status"] = "done"
+        _finish(task, "done", progress=100,
+                message="改写完成，请检查差异后决定是否保留",
+                result=result, cancel_wins=True,
+                cancel_message="已取消改写，本次结果不保存")
     except RuntimeError as e:
         if str(e) == "__cancelled__":
-            task["status"] = "cancelled"
-            _log(task, "cancelled", "已取消改写，本次结果不保存")
+            _finish(task, "cancelled", message="已取消改写，本次结果不保存")
         else:
-            _fail(task, e)
+            _fail(task, e, cancel_wins=True,
+                  cancel_message="已取消改写，本次结果不保存")
     except quota.QuotaExceeded as e:
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True,
+              cancel_message="已取消改写，本次结果不保存")
     except ValueError as e:
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True,
+              cancel_message="已取消改写，本次结果不保存")
     except Exception as e:
         logger.exception("段落改写失败")
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True,
+              cancel_message="已取消改写，本次结果不保存")
 
 
 @router.post("/{paper_id}/rewrite")
@@ -948,14 +1414,20 @@ def api_rewrite(paper_id: str, body: RewriteBody, request: Request):
     g = gate(body.instruction or "润色这段论文内容", True)
     if not g["allowed"]:
         raise HTTPException(400, g["reply"])
-    try:
-        quota.check(unlimited=bool(getattr(request.state, "admin_user", "")))
-    except quota.QuotaExceeded as e:
-        raise HTTPException(429, str(e))
 
-    task_id = _new_task("rewrite", paper_id)
-    _spawn(_rewrite_worker, task_id, paper_id, body.paragraph_id, body.mode,
-           body.instruction, bool(body.use_guideline))
+    key = "rewrite:" + "|".join([
+        body.paragraph_id,
+        body.mode,
+        body.instruction or "",
+        str(int(bool(body.use_guideline))),
+    ])
+    task_id = _launch(
+        "rewrite", paper_id, key, _rewrite_worker,
+        body.paragraph_id, body.mode, body.instruction,
+        bool(body.use_guideline),
+        quota_amount=1,
+        quota_unlimited=bool(getattr(request.state, "admin_user", "")),
+    )
     return {"task_id": task_id}
 
 
@@ -964,17 +1436,8 @@ def api_rewrite_status(paper_id: str, task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("kind") not in ("rewrite", "rewrite_batch") \
             or task.get("paper_id") != paper_id:
-        raise HTTPException(404, "改写任务不存在")
-    return {
-        "status": task["status"],
-        "stage": task["stage"],
-        "progress": int(task.get("progress") or 0),
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "logs": task["logs"],
-        "result": task.get("result"),
-        "report": task.get("report"),
-        "error": task.get("error"),
-    }
+        raise HTTPException(404, "改写任务不存在或已因服务重启失效，请重新发起")
+    return _task_view(task, ("result", "report"))
 
 
 @router.post("/{paper_id}/rewrite/{task_id}/cancel")
@@ -982,15 +1445,9 @@ def api_rewrite_cancel(paper_id: str, task_id: str):
     task = PAPER_TASKS.get(task_id)
     if not task or task.get("kind") not in ("rewrite", "rewrite_batch") \
             or task.get("paper_id") != paper_id:
-        raise HTTPException(404, "改写任务不存在")
-    if task["status"] == "running" and not task.get("cancel_requested"):
-        task["cancel_requested"] = True
-        _log(task, "cancelling", "收到取消请求，当前段落完成后停止")
-    return {
-        "status": task["status"],
-        "cancel_requested": bool(task.get("cancel_requested")),
-        "progress": int(task.get("progress") or 0),
-    }
+        raise HTTPException(404, "改写任务不存在或已因服务重启失效，请重新发起")
+    _cancel_task(task, message="收到取消请求，当前段落完成后停止")
+    return _cancel_response(task)
 
 
 def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
@@ -1006,7 +1463,8 @@ def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
     try:
         _log(task, "init", f"批量改写 {total} 个段落…")
         task["progress"] = 5
-        paragraphs = {p.get("id"): p for p in store.current_paragraphs(paper_id)}
+        version, snapshot = store.snapshot_current(paper_id)
+        paragraphs = {p.get("id"): p for p in snapshot}
         requirement = store.load_requirement(paper_id) or {}
         guide = store.load_rewrite_guide(paper_id) if use_guideline else None
         guide_text = guideline_text(guide) if guide else ""
@@ -1024,7 +1482,7 @@ def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
                 result = rewrite_paragraph(
                     llm, target.get("text") or "", requirement,
                     mode=mode, instruction=instruction, paper_id=paper_id,
-                    guideline=guide_text,
+                    guideline=guide_text, version=version,
                 )
                 result["paragraph_id"] = pid
                 items.append(result)
@@ -1036,20 +1494,20 @@ def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
                 logger.warning(f"批量改写失败 {pid}: {e}")
                 errors.append({"paragraph_id": pid, "error": str(e)})
             task["progress"] = 5 + int(90 * idx / max(1, total))
-        task["report"] = {"items": items, "errors": errors}
+        report = {"items": items, "errors": errors}
+        stop_message = f"已取消批量改写，已完成 {len(items)}/{total} 段"
         if cancelled():
-            task["status"] = "cancelled"
-            _log(task, "cancelled", f"已取消批量改写，已完成 {len(items)}/{total} 段")
+            _finish(task, "cancelled", message=stop_message, report=report)
         else:
-            task["progress"] = 100
             msg = f"批量改写完成：成功 {len(items)} 段"
             if errors:
                 msg += f"，失败 {len(errors)} 段" + ("（配额不足）" if stopped_by_quota else "")
-            _log(task, "done", msg)
-            task["status"] = "done"
+            _finish(task, "done", progress=100, message=msg, report=report,
+                    cancel_wins=True, cancel_message=stop_message)
     except Exception as e:
         logger.exception("批量改写任务失败")
-        _fail(task, e)
+        _fail(task, e, cancel_wins=True,
+              cancel_message="已取消批量改写，本次结果不保存")
 
 
 @router.post("/{paper_id}/rewrite/batch")
@@ -1068,14 +1526,19 @@ def api_rewrite_batch(paper_id: str, body: RewriteBatchBody, request: Request):
     g = gate(body.instruction or "批量润色论文段落", True)
     if not g["allowed"]:
         raise HTTPException(400, g["reply"])
-    try:
-        quota.check(unlimited=bool(getattr(request.state, "admin_user", "")))
-    except quota.QuotaExceeded as e:
-        raise HTTPException(429, str(e))
 
-    task_id = _new_task("rewrite_batch", paper_id)
-    _spawn(_batch_worker, task_id, paper_id, ids, body.mode,
-           body.instruction, bool(body.use_guideline))
+    key = "batch:" + "|".join([
+        ",".join(sorted(ids)),
+        body.mode,
+        body.instruction or "",
+        str(int(bool(body.use_guideline))),
+    ])
+    task_id = _launch(
+        "rewrite_batch", paper_id, key, _batch_worker, ids, body.mode,
+        body.instruction, bool(body.use_guideline),
+        quota_amount=len(ids),
+        quota_unlimited=bool(getattr(request.state, "admin_user", "")),
+    )
     return {"task_id": task_id, "count": len(ids)}
 
 
@@ -1083,7 +1546,28 @@ def api_rewrite_batch(paper_id: str, body: RewriteBatchBody, request: Request):
 def api_apply(paper_id: str, body: ApplyBody):
     _paper_or_404(paper_id)
     try:
-        return apply_rewrite(paper_id, body.paragraph_id, body.revised)
+        return apply_rewrite(
+            paper_id, body.paragraph_id, body.revised,
+            expected_version=body.expected_version,
+            expected_original=body.expected_original,
+        )
+    except store.VersionConflict as e:
+        return _conflict_response(e)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@router.post("/{paper_id}/apply-batch")
+def api_apply_batch(paper_id: str, body: ApplyBatchBody):
+    _paper_or_404(paper_id)
+    try:
+        return apply_rewrites(
+            paper_id, [item.model_dump() for item in body.items],
+        )
+    except store.VersionConflict as e:
+        return _conflict_response(e)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
     except ValueError as e:
@@ -1093,10 +1577,26 @@ def api_apply(paper_id: str, body: ApplyBody):
 @router.get("/{paper_id}/versions")
 def api_versions(paper_id: str):
     meta = _paper_or_404(paper_id)
+    try:
+        versions = store.list_versions(paper_id)
+    except ValueError as e:
+        raise HTTPException(500, str(e))
     return {
         "current_version": meta.get("current_version", 0),
-        "versions": store.list_versions(paper_id),
+        "version_count": len(versions),
+        "archived_count": sum(1 for v in versions if v.get("archived")),
+        "versions": versions,
     }
+
+
+@router.post("/{paper_id}/versions/cleanup")
+def api_cleanup_versions(paper_id: str,
+                         body: VersionCleanupBody = VersionCleanupBody()):
+    _paper_or_404(paper_id)
+    try:
+        return store.compact_versions(paper_id, body.keep_recent)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/{paper_id}/version/{n}")
@@ -1106,6 +1606,32 @@ def api_get_version(paper_id: str, n: int):
         return store.load_version(paper_id, n)
     except FileNotFoundError as e:
         raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(500, str(e))
+
+
+@router.get("/{paper_id}/backup")
+def api_backup(paper_id: str):
+    meta = _paper_or_404(paper_id)
+    fd, path = tempfile.mkstemp(prefix="paper-backup-", suffix=".zip")
+    os.close(fd)
+    try:
+        backup.create_backup_archive(paper_id, path)
+    except backup.BackupError as e:
+        _remove_quietly(path)
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        _remove_quietly(path)
+        logger.exception("生成论文备份失败")
+        raise HTTPException(500, f"生成备份失败：{e}")
+    stamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = f"{_paper_stem(meta)}_备份_{stamp}.zip"
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        headers={"Content-Disposition": _attachment_header(filename)},
+        background=BackgroundTask(_remove_quietly, path),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1165,10 +1691,24 @@ def api_export(paper_id: str, format: str = "docx"):
 
 @router.delete("/{paper_id}")
 def api_delete(paper_id: str):
-    try:
-        ok = store.delete_paper(paper_id)
-    except ValueError:
-        raise HTTPException(404, "论文不存在或已被删除")
+    _paper_or_404(paper_id)
+    with _TASK_LOCK:
+        _DELETING_PAPERS.add(paper_id)
+        try:
+            # 先把关联任务置为终态，迟到的 worker 结果不会再写回已删除论文。
+            related = [
+                task for task in PAPER_TASKS.values()
+                if task.get("paper_id") == paper_id
+                and task.get("status") not in _TERMINAL
+            ]
+            for task in related:
+                _cancel_task(task, immediate=True, message="论文已删除，任务已取消")
+            try:
+                ok = store.delete_paper(paper_id)
+            except ValueError:
+                raise HTTPException(404, "论文不存在或已被删除")
+        finally:
+            _DELETING_PAPERS.discard(paper_id)
     if not ok:
         raise HTTPException(404, "论文不存在或已被删除")
     return {"ok": True, "deleted": paper_id}
@@ -1211,7 +1751,7 @@ def api_ask(paper_id: str, body: AskBody):
     if not g["allowed"]:
         return {"answer": g["reply"], "basis": [], "rejected": True}
 
-    parsed = store.load_parsed(paper_id)
+    parsed = store.current_parsed(paper_id)
     context = _qa_context(parsed, question)
     system = PAPER_QA_PROMPT
     user = (

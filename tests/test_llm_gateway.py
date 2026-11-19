@@ -3,9 +3,8 @@
 import pytest
 
 from config.settings import settings
-from llm import gateway
 from llm.gateway import LLMGateway, extract_json
-from utils import quota
+from utils import auth, quota
 
 
 class FakeResp:
@@ -22,6 +21,20 @@ class FakeLLM:
     def chat(self, messages, temperature=0.7, max_tokens=None):
         self.calls += 1
         return FakeResp(self.contents.pop(0))
+
+
+class RaisingLLM:
+    def __init__(self, exc):
+        self.exc = exc
+        self.calls = 0
+
+    def chat(self, messages, temperature=0.7, max_tokens=None):
+        self.calls += 1
+        raise self.exc
+
+
+def _used() -> int:
+    return quota.usage_snapshot()["used"]
 
 
 @pytest.fixture(autouse=True)
@@ -74,3 +87,81 @@ def test_rate_limit_notice_not_retried():
     with pytest.raises(RuntimeError, match="限流"):
         LLMGateway(llm).run("paper_qa", [{"role": "user", "content": "x"}])
     assert llm.calls == 1
+
+
+def test_successful_call_charges_once():
+    llm = FakeLLM('{"ok": true}')
+    LLMGateway(llm).run(
+        "feasibility", [{"role": "user", "content": "x"}],
+        validator=lambda d: d.get("ok") is True,
+    )
+    assert _used() == 1
+
+
+def test_retry_within_one_call_charges_once():
+    llm = FakeLLM("不是 JSON", '{"ok": true}')
+    LLMGateway(llm).run(
+        "feasibility", [{"role": "user", "content": "x"}],
+        validator=lambda d: d.get("ok") is True,
+    )
+    assert llm.calls == 2
+    assert _used() == 1
+
+
+def test_invalid_output_keeps_one_charge():
+    llm = FakeLLM("不是 JSON", "还不是")
+    with pytest.raises(RuntimeError, match="模型输出不是合法 JSON"):
+        LLMGateway(llm).run(
+            "deai_rewrite", [{"role": "user", "content": "x"}],
+            validator=lambda d: isinstance(d, dict),
+        )
+    assert llm.calls == 2
+    assert _used() == 1
+
+
+def test_provider_error_refunds_charge():
+    llm = FakeLLM("API 调用失败: Error code: 401 - Authentication Fails")
+    with pytest.raises(RuntimeError, match="401.*添加模型"):
+        LLMGateway(llm).run("feasibility", [{"role": "user", "content": "x"}])
+    assert llm.calls == 1
+    assert _used() == 0
+
+
+def test_transport_failure_refunds_charge():
+    llm = RaisingLLM(ConnectionError("offline"))
+    with pytest.raises(RuntimeError, match="执行失败"):
+        LLMGateway(llm).run("paper_qa", [{"role": "user", "content": "x"}])
+    assert llm.calls == 2
+    assert _used() == 0
+
+
+def test_late_provider_error_keeps_charge_after_real_output():
+    llm = FakeLLM("不是 JSON", "API 调用失败: 401")
+    with pytest.raises(RuntimeError, match="401"):
+        LLMGateway(llm).run(
+            "deai_rewrite", [{"role": "user", "content": "x"}],
+            validator=lambda d: isinstance(d, dict),
+        )
+    assert llm.calls == 2
+    assert _used() == 1
+
+
+def test_exhausted_quota_blocks_before_model_call(monkeypatch):
+    monkeypatch.setattr(settings, "DAILY_QUOTA", 0)
+    llm = FakeLLM('{"ok": true}')
+    with pytest.raises(quota.QuotaExceeded):
+        LLMGateway(llm).run("feasibility", [{"role": "user", "content": "x"}])
+    assert llm.calls == 0
+    assert _used() == 0
+
+
+def test_admin_failure_does_not_refund_regular_quota():
+    quota.consume()
+    token = auth.set_admin(True)
+    try:
+        llm = FakeLLM("API 调用失败: 401")
+        with pytest.raises(RuntimeError):
+            LLMGateway(llm).run("feasibility", [{"role": "user", "content": "x"}])
+    finally:
+        auth.reset_admin(token)
+    assert _used() == 1

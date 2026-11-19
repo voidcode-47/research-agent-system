@@ -42,14 +42,6 @@ def _line_key(line: str) -> str | None:
     return m.group(1) if m else None
 
 
-def get_env_value(lines: list[str], key: str, default: str = "") -> str:
-    """从 env 行中取指定 key 的值。"""
-    for line in lines:
-        if _line_key(line) == key:
-            return line.split("=", 1)[1].strip()
-    return default
-
-
 def update_env(updates: dict[str, str], path: str | Path = ".env") -> Path:
     """更新 .env 中的键值（已有 key 原位更新，新 key 追加），返回文件路径。"""
     p = Path(path)

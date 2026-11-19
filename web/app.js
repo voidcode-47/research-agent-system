@@ -16,9 +16,16 @@ function esc(s) {
 async function api(url, opts) {
   const resp = await fetch(url, opts);
   if (!resp.ok) {
-    let detail = "";
-    try { detail = (await resp.json()).detail || ""; } catch (e) {}
-    throw new Error(detail || `HTTP ${resp.status}`);
+    let payload = null;
+    try { payload = await resp.json(); } catch (e) { /* non-JSON error body */ }
+    const detail = payload && payload.detail;
+    const message = typeof detail === "string"
+      ? detail
+      : (detail && detail.message) || `HTTP ${resp.status}`;
+    const err = new Error(message);
+    err.status = resp.status;
+    err.payload = payload;
+    throw err;
   }
   return resp.json();
 }
@@ -64,8 +71,8 @@ function renderMarkdown(text) {
       const level = html.match(/^#{1,6}/)[0].length;
       html = html.replace(/^#{1,6}\s/, "");
       out.push(`<h${level}>${html}</h${level}>`);
-    } else if (/^>\s?/.test(html)) {
-      out.push(`<blockquote>${html.replace(/^>\s?/, "")}</blockquote>`);
+    } else if (/^&gt;\s?/.test(html)) {
+      out.push(`<blockquote>${html.replace(/^&gt;\s?/, "")}</blockquote>`);
     } else if (/^\s*[-*]\s+/.test(html)) {
       out.push(`<li>${html.replace(/^\s*[-*]\s+/, "")}</li>`);
     } else if (/^\s*\d+[.、]\s+/.test(html)) {
@@ -109,14 +116,6 @@ document.getElementById("nav").addEventListener("click", (e) => {
 });
 
 // ---------- 状态 ----------
-const store = {
-  get(key, def) {
-    try { const v = localStorage.getItem(key); return v === null ? def : JSON.parse(v); }
-    catch (e) { return def; }
-  },
-  set(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} },
-};
-
 let providersInfo = null; // {providers, labels, current_provider, current_model, custom_api}
 let authInfo = { authenticated: false, username: "", role: "user", unlimited: false, can_manage_models: false };
 
@@ -205,15 +204,11 @@ function modelDisplay(p, m) {
   return m ? `${label} · ${m}` : `${label} · 默认模型`;
 }
 
-// 全局模型：自定义 API 的模型名单独保存，优先展示
+// 全局模型：展示服务端实际生效的提供商与模型
 function currentProviderModel() {
   if (!providersInfo) return { provider: "", model: "" };
-  const provider = providersInfo.current_provider
-    || (providersInfo.custom_api?.api_key ? "custom" : "")
-    || "";
-  const model = provider === "custom"
-    ? (providersInfo.custom_api?.model || providersInfo.current_model || "")
-    : (providersInfo.current_model || "");
+  const provider = providersInfo.effective_provider || providersInfo.current_provider || "";
+  const model = providersInfo.effective_model || providersInfo.current_model || "";
   return { provider, model };
 }
 
