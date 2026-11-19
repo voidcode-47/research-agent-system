@@ -4,7 +4,25 @@
 本类可被多个提供商复用，只需传入不同 base_url 和 api_key。
 """
 import json
+import os
+import re
 from typing import Iterator, Optional
+
+
+def _clean_no_proxy() -> None:
+    """httpx2（openai 3.x 依赖）无法解析 NO_PROXY 中的 IPv6 字面量（如 [::1]），
+    创建客户端时会报 Invalid port；启动时剔除这类条目，避免模型调用全部失败。"""
+    for key in ("NO_PROXY", "no_proxy"):
+        raw = os.environ.get(key)
+        if raw:
+            kept = [
+                p.strip() for p in raw.split(",")
+                if p.strip() and not re.fullmatch(r"\[[^\]]*\]", p.strip())
+            ]
+            os.environ[key] = ",".join(kept)
+
+
+_clean_no_proxy()
 
 from openai import (
     OpenAI,
