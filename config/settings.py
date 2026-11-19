@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = "./data/chroma_db"
     UPLOADS_DIR: str = "./data/uploads"
     CACHE_DIR: str = "./data/cache"
+    # 论文工作台数据目录（papers/index.json 与各 paper_id 子目录）
+    PAPER_DATA_DIR: str = "./data/papers"
+
+    # 论文工作台开关：True 时 /api/chat 强制走论文 guard，非论文请求固定拒答
+    PAPER_ONLY_MODE: bool = False
+    # 每日 LLM 调用配额（按 key 计数，论文任务默认 local）
+    DAILY_QUOTA: int = 30
 
     def ensure_dirs(self) -> None:
         """确保数据目录存在。"""

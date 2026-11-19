@@ -1,0 +1,144 @@
+"""统一 LLM 网关：任务白名单 → 配额 → 封顶 max_tokens → JSON 校验 → 重试一次。
+
+审计日志只记录 task_type、paper_id、tokens、成功/失败，绝不记录论文正文。
+"""
+import json
+import re
+import time
+
+from config.paper import LLM_TASKS
+from utils import quota
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S | re.I)
+
+# OpenAICompatibleLLM 在 Key 无效 / 限流 / 本地未加载模型时把错误文本当内容返回
+_PROVIDER_ERROR_PREFIXES = ("API 调用失败", "⚠️", "本地服务")
+
+
+class _ModelCallFailed(RuntimeError):
+    """模型调用本身失败（非 JSON 格式问题），不重试。"""
+
+
+def _provider_error(content: str) -> bool:
+    return (content or "").strip().startswith(_PROVIDER_ERROR_PREFIXES)
+
+
+def extract_json(text: str):
+    """从模型输出中提取第一个合法 JSON 对象。
+
+    容忍 ```json 围栏、前后废话；用括号配对（跳过字符串内括号）截取对象。
+    """
+    if not text:
+        return None
+    s = text.strip()
+    m = _FENCE_RE.search(s)
+    if m:
+        s = m.group(1).strip()
+
+    start = s.find("{")
+    while start != -1:
+        depth = 0
+        in_str = False
+        escaped = False
+        for i in range(start, len(s)):
+            ch = s[i]
+            if in_str:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(s[start:i + 1])
+                    except json.JSONDecodeError:
+                        break
+        start = s.find("{", start + 1)
+    return None
+
+
+class LLMGateway:
+    """所有论文相关 LLM 调用的唯一入口。"""
+
+    def __init__(self, llm, quota_key: str = "local"):
+        self.llm = llm
+        self.quota_key = quota_key
+
+    def run(
+        self,
+        task_type: str,
+        messages: list[dict],
+        paper_id: str = "",
+        max_tokens: int | None = None,
+        temperature: float = 0.3,
+        expect_json: bool = True,
+        validator=None,
+    ):
+        task = LLM_TASKS.get(task_type)
+        if not task:
+            raise ValueError(f"不允许的 LLM 任务类型：{task_type}")
+        limit = min(int(max_tokens or task["max_tokens"]), int(task["max_tokens"]))
+
+        # 先检查再消耗：超限时不发起模型调用
+        quota.check(self.quota_key)
+        quota.consume(self.quota_key)
+
+        msgs = list(messages)
+        last_err: Exception | None = None
+        for attempt in range(2):
+            started = time.monotonic()
+            resp = None
+            try:
+                resp = self.llm.chat(msgs, temperature=temperature, max_tokens=limit)
+                content = getattr(resp, "content", "") or ""
+                data = extract_json(content) if expect_json else content
+                if expect_json and data is None:
+                    if _provider_error(content):
+                        self._audit(task_type, paper_id, resp, started, False,
+                                    content.strip()[:120])
+                        msg = content.strip()[:200]
+                        if re.search(r"401|403|authentication|api[\s_-]*key", msg, re.I):
+                            msg += "。请在侧边栏「添加模型」并填写有效 API Key 后重试。"
+                        raise _ModelCallFailed(msg)
+                    raise ValueError("模型输出不是合法 JSON")
+                if validator is not None and not validator(data):
+                    raise ValueError("模型输出未通过结构校验")
+                self._audit(task_type, paper_id, resp, started, True)
+                return data
+            except _ModelCallFailed:
+                raise
+            except Exception as e:
+                last_err = e
+                self._audit(task_type, paper_id, resp, started, False, str(e))
+                if attempt == 0:
+                    msgs = list(messages) + [{
+                        "role": "user",
+                        "content": (
+                            "你上一次的输出不符合要求，原因：" + str(e)[:120] +
+                            "。请严格只输出一个合法 JSON 对象，字段按要求返回。"
+                        ),
+                    }]
+        raise RuntimeError(f"模型任务 {task_type} 执行失败：{last_err}")
+
+    def _audit(self, task_type: str, paper_id: str, resp, started: float,
+               ok: bool, error: str = "") -> None:
+        """审计：只记录任务、论文 ID、token 与结果，不记录正文。"""
+        usage = getattr(resp, "usage", None) or {}
+        tokens = usage.get("total_tokens") if isinstance(usage, dict) else None
+        logger.info(
+            "[paper-llm] task=%s paper=%s tokens=%s ok=%s elapsed=%.2fs%s",
+            task_type, paper_id or "-", tokens if tokens is not None else "-",
+            ok, time.monotonic() - started,
+            f" error={error[:120]}" if error else "",
+        )

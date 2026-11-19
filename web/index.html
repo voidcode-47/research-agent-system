@@ -3,35 +3,32 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>研究助手 - 多智能体系统</title>
-<link rel="stylesheet" href="/style.css?v=2.1.0">
+<title>论文诊断与优化工作台</title>
+<link rel="stylesheet" href="/style.css?v=2.4.1">
 </head>
 <body>
 <div class="layout">
   <!-- ======================= 侧边栏 ======================= -->
   <aside class="sidebar">
     <div class="brand">
-      <span class="brand-mark">研</span>
-      <span class="brand-text">研究助手</span>
+      <span class="brand-mark">论</span>
+      <span class="brand-text">论文工作台</span>
     </div>
 
     <nav id="nav">
-      <button class="nav-item active" data-page="chat">智能对话</button>
-      <button class="nav-item" data-page="research">多智能体研究</button>
-      <button class="nav-item" data-page="knowledge">知识库</button>
+      <button class="nav-item active" data-page="paper">论文工作台</button>
+      <button class="nav-item" data-page="research">参考文献调研</button>
       <button class="nav-item" data-page="settings">设置</button>
     </nav>
 
     <div class="sidebar-model">
       <div class="sidebar-model-head">
-        <span class="sidebar-title">模型配置</span>
-        <span id="scene-label" class="scene-label">智能对话</span>
+        <span class="sidebar-title">当前模型</span>
       </div>
-      <label class="lbl">当前模型</label>
-      <select id="model-switch" class="input"><option value="">加载中...</option></select>
+      <div id="model-current" class="model-current">加载中...</div>
       <div class="btn-row">
         <button id="btn-test" class="btn">测试连接</button>
-        <button id="btn-goto-settings" class="btn">添加模型</button>
+        <button id="btn-goto-settings" class="btn">去设置</button>
       </div>
       <div id="conn-status"></div>
     </div>
@@ -45,8 +42,159 @@
   <!-- ======================= 主内容区 ======================= -->
   <main class="content">
 
-    <!-- ===== 对话页 ===== -->
-    <section id="view-chat" class="view active">
+    <!-- ===== 论文工作台（五步向导） ===== -->
+    <section id="view-paper" class="view active">
+      <div class="view-header">
+        <div class="view-title">
+          <h1>论文诊断与优化</h1>
+          <p class="view-sub">上传 PDF → 需求确认 → 四维诊断 → 相似论文 → 段落改写 → 导出 Word。只做诊断、建议与局部改写，不代写整篇论文。</p>
+        </div>
+        <div class="toolbar">
+          <select id="paper-select" class="input" title="历史论文">
+            <option value="">选择论文...</option>
+          </select>
+          <button id="btn-paper-refresh" class="btn btn-ghost">刷新</button>
+          <button id="btn-paper-delete" class="btn btn-ghost">删除</button>
+        </div>
+      </div>
+
+      <div class="paper-steps" id="paper-steps">
+        <button class="paper-step active" data-step="1"><b>1</b><span>上传</span></button>
+        <button class="paper-step" data-step="2"><b>2</b><span>需求确认</span></button>
+        <button class="paper-step" data-step="3"><b>3</b><span>四维诊断</span></button>
+        <button class="paper-step" data-step="4"><b>4</b><span>相似论文</span></button>
+        <button class="paper-step" data-step="5"><b>5</b><span>段落改写</span></button>
+      </div>
+
+      <div id="paper-alert" class="paper-alert hidden"></div>
+
+      <!-- ① 上传 -->
+      <div class="paper-step-panel active" id="paper-step-1">
+        <div class="card">
+          <div class="section-title">① 上传论文 PDF</div>
+          <p class="muted">仅支持 PDF 文件（≤50MB、≤200 页）。扫描件需先 OCR 后再上传；解析结果会持久化保存在本机 <code>data/papers/</code>。</p>
+          <div class="row">
+            <input type="file" id="paper-file" class="input file-input" accept=".pdf,application/pdf">
+            <button id="btn-paper-upload" class="btn btn-primary">上传并解析</button>
+          </div>
+          <div id="paper-upload-result" class="paper-result"></div>
+        </div>
+      </div>
+
+      <!-- ② 需求确认 -->
+      <div class="paper-step-panel" id="paper-step-2">
+        <div class="card">
+          <div class="section-title">② 确认诊断需求</div>
+          <p class="muted">诊断必须基于确认后的需求。修改需求会将已有诊断标记为过期，需要重新诊断。</p>
+          <div class="paper-form-grid">
+            <div>
+              <label class="lbl">论文类型 / 层次</label>
+              <select id="paper-level" class="input"></select>
+            </div>
+            <div>
+              <label class="lbl">格式模板</label>
+              <select id="paper-template" class="input"></select>
+            </div>
+            <div>
+              <label class="lbl">参考文献格式</label>
+              <select id="paper-refstyle" class="input"></select>
+            </div>
+            <div>
+              <label class="lbl">去 AI 味强度</label>
+              <select id="paper-deai-strength" class="input"></select>
+            </div>
+          </div>
+          <label class="lbl">去 AI 味时必须保留</label>
+          <div class="chk-group" id="paper-keep">
+            <label class="chk"><input type="checkbox" value="数据" checked> 数据与数字</label>
+            <label class="chk"><input type="checkbox" value="术语" checked> 专业术语</label>
+            <label class="chk"><input type="checkbox" value="引用" checked> 引用与出处</label>
+          </div>
+          <label class="lbl">禁用表达（可选，用顿号或逗号分隔）</label>
+          <input id="paper-banned" class="input" placeholder="例如：综上所述、赋能、抓手">
+          <label class="lbl">补充说明（可选）</label>
+          <textarea id="paper-notes" class="input" rows="2" placeholder="例如：学校要求正文 1.5 倍行距、标题层级最多三级"></textarea>
+          <div class="topic-actions">
+            <button id="btn-paper-confirm" class="btn btn-primary">确认需求</button>
+            <span id="paper-req-status" class="hint-line"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ③ 四维诊断 -->
+      <div class="paper-step-panel" id="paper-step-3">
+        <div class="card">
+          <div class="section-title">③ 四维诊断</div>
+          <div class="row">
+            <button id="btn-paper-diagnose" class="btn btn-primary">开始诊断</button>
+            <span id="paper-quota" class="hint-line"></span>
+          </div>
+          <div class="paper-total" id="paper-total-score"></div>
+          <div id="paper-dim-cards" class="paper-dim-cards"></div>
+          <div id="paper-diag-logs" class="log-area hidden"></div>
+          <div id="paper-issues" class="paper-issues"></div>
+        </div>
+      </div>
+
+      <!-- ④ 相似论文 -->
+      <div class="paper-step-panel" id="paper-step-4">
+        <div class="card">
+          <div class="section-title">④ 相似论文推荐</div>
+          <p class="muted">基于论文标题与关键词，检索 Crossref / OpenAlex 的公开元数据，仅作为参考文献调研线索。</p>
+          <div class="row">
+            <button id="btn-paper-similar" class="btn btn-primary">查找相似论文</button>
+            <button id="btn-paper-similar-refresh" class="btn btn-ghost">重新检索</button>
+            <span id="paper-similar-status" class="hint-line"></span>
+          </div>
+          <div id="paper-similar-list" class="paper-similar-list"></div>
+        </div>
+      </div>
+
+      <!-- ⑤ 段落改写 -->
+      <div class="paper-step-panel" id="paper-step-5">
+        <div class="paper-rewrite-layout">
+          <div class="card">
+            <div class="section-title">段落选择</div>
+            <div class="row">
+              <select id="paper-section-filter" class="input">
+                <option value="">全部章节</option>
+              </select>
+              <button id="btn-paper-export" class="btn btn-ghost">导出 Word</button>
+            </div>
+            <div id="paper-paragraph-list" class="paper-para-list"></div>
+          </div>
+          <div class="card">
+            <div class="section-title">段落改写（逐段确认）</div>
+            <div class="paper-original" id="paper-original">在左侧选择一个正文段落。</div>
+            <div class="paper-form-grid">
+              <div>
+                <label class="lbl">改写模式</label>
+                <select id="paper-mode" class="input"></select>
+              </div>
+              <div class="paper-version" id="paper-version"></div>
+            </div>
+            <label class="lbl">改写要求（可选）</label>
+            <input id="paper-instruction" class="input" placeholder="例如：压缩到 200 字以内，保留原有数据">
+            <div class="topic-actions">
+              <button id="btn-paper-rewrite" class="btn btn-primary">生成改写</button>
+              <button id="btn-paper-adopt" class="btn hidden">采纳并保存</button>
+            </div>
+            <div id="paper-rewrite-warning" class="paper-warning hidden"></div>
+            <div id="paper-rewrite-meta" class="hint-line"></div>
+            <div id="paper-diff" class="paper-diff"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="paper-ask-bar" id="paper-ask-bar">
+        <input id="paper-ask-input" class="input" placeholder="针对论文提问，例如：第三章的方法和结论是否对应？" autocomplete="off">
+        <button id="btn-paper-ask" class="btn btn-primary">提问</button>
+        <div id="paper-ask-answer" class="paper-ask-answer hidden"></div>
+      </div>
+    </section>
+
+    <!-- ===== 对话页（保留功能，平台不提供自由聊天入口） ===== -->
+    <section id="view-chat" class="view">
       <div class="view-header">
         <div class="view-title">
           <h1>智能对话</h1>
@@ -91,47 +239,60 @@
 
     <!-- ===== 研究页 ===== -->
     <section id="view-research" class="view">
-      <div class="view-header"><h1>多智能体研究</h1></div>
+      <div class="view-header">
+        <div class="view-title">
+          <h1>参考文献调研</h1>
+          <p class="view-sub">输入论文方向 → 自动检索 Crossref / OpenAlex 文献 → 生成综合调研报告。文献仅作调研线索，请自行核对原文。</p>
+        </div>
+      </div>
 
       <div class="card topic-card">
-        <label class="lbl">研究主题</label>
+        <label class="lbl">论文方向 / 研究主题</label>
         <textarea id="research-topic" class="input topic-input" rows="3"
-          placeholder="例如：2024 年大语言模型推理优化的最新进展"></textarea>
+          placeholder="例如：人脸识别 / 大语言模型推理优化 / 工业质检中的缺陷检测"></textarea>
         <div class="topic-actions">
           <details class="adv">
-            <summary>高级配置</summary>
+            <summary>检索设置</summary>
             <div class="adv-grid">
               <div>
-                <label class="lbl">最大迭代次数 <span id="v-iters"></span></label>
-                <input type="range" id="iters" min="3" max="15" value="8">
+                <label class="lbl">参考文献条数 <span id="v-results"></span></label>
+                <input type="range" id="results" min="5" max="10" value="8">
               </div>
               <div>
-                <label class="lbl">单次检索条数 <span id="v-results"></span></label>
-                <input type="range" id="results" min="2" max="10" value="5">
+                <label class="lbl">报告详细度</label>
+                <select id="report-style" class="input">
+                  <option value="detailed">详细版</option>
+                  <option value="standard">标准版</option>
+                </select>
               </div>
             </div>
-            <div class="chk-group">
-              <label class="chk"><input type="checkbox" id="rag-use"> 启用本地知识库</label>
-              <label class="chk"><input type="checkbox" id="pre-search" checked> 并行预检索</label>
-              <label class="chk"><input type="checkbox" id="auto-ingest" checked> 自动入库 OA 论文</label>
-            </div>
-            <label class="lbl">报告详细度</label>
-            <select id="report-style" class="input">
-              <option value="detailed">详细版</option>
-              <option value="standard">标准版</option>
-            </select>
           </details>
-          <button id="btn-research" class="btn btn-primary">开始研究</button>
+          <div class="topic-btns">
+            <button id="btn-research" class="btn btn-primary">开始调研</button>
+            <button id="btn-research-cancel" class="btn btn-danger hidden">停止调研</button>
+          </div>
         </div>
       </div>
 
       <div id="research-progress" class="card hidden">
-        <div class="section-title">研究进度</div>
+        <div class="progress-head">
+          <span class="section-title">调研进度</span>
+          <span id="research-percent" class="progress-percent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="research-progress-fill" class="progress-fill"></div>
+        </div>
+        <div id="research-stage" class="progress-stage">准备中...</div>
         <div id="research-logs" class="log-area"></div>
       </div>
 
+      <div id="research-refs" class="card hidden">
+        <div class="section-title">参考文献 <span id="research-ref-count" class="hint-line"></span></div>
+        <div id="research-ref-list" class="research-ref-list"></div>
+      </div>
+
       <div id="research-result" class="card hidden">
-        <div class="section-title">研究报告</div>
+        <div class="section-title">综合报告</div>
         <div class="result-actions">
           <button id="btn-dl-md" class="btn btn-ghost">下载 Markdown</button>
           <button id="btn-dl-docx" class="btn btn-ghost">下载 Word</button>
@@ -204,66 +365,20 @@
       <div class="view-header"><h1>设置</h1></div>
       <div class="settings-grid">
         <div class="card">
-          <div class="section-title">研究默认参数</div>
-          <p class="muted">保存后，研究页新任务自动使用这些默认值（研究页内仍可临时调整）</p>
-          <div class="adv-grid">
-            <div>
-              <label class="lbl">默认迭代次数 <span id="set-v-iters"></span></label>
-              <input type="range" id="set-iters" min="3" max="15" value="8">
-            </div>
-            <div>
-              <label class="lbl">默认检索条数 <span id="set-v-results"></span></label>
-              <input type="range" id="set-results" min="2" max="10" value="5">
-            </div>
+          <div class="section-title">调研默认参数</div>
+          <p class="muted">保存后，参考文献调研页新任务自动使用这些默认值（页内仍可临时调整）</p>
+          <div>
+            <label class="lbl">默认参考文献条数 <span id="set-v-results"></span></label>
+            <input type="range" id="set-results" min="5" max="10" value="8">
           </div>
           <label class="lbl">默认报告详细度</label>
           <select id="set-style" class="input">
             <option value="detailed">详细版</option>
             <option value="standard">标准版</option>
           </select>
-          <div class="chk-group">
-            <label class="chk"><input type="checkbox" id="set-rag"> 默认启用本地知识库</label>
-            <label class="chk"><input type="checkbox" id="set-presearch"> 默认并行预检索</label>
-            <label class="chk"><input type="checkbox" id="set-autoingest"> 默认自动入库 OA 论文</label>
-          </div>
           <div class="topic-actions">
-            <button id="btn-save-research-settings" class="btn btn-primary">保存研究默认参数</button>
+            <button id="btn-save-research-settings" class="btn btn-primary">保存调研默认参数</button>
             <span id="research-settings-status" class="hint-line"></span>
-          </div>
-        </div>
-        <div class="card">
-          <div class="section-title">各功能模型</div>
-          <p class="muted">每个功能可配置多个模型，随时切换当前使用的那个；切换即时生效。</p>
-          <span id="scene-settings-status" class="hint-line"></span>
-          <div class="scene-block">
-            <div class="scene-block-head">智能对话</div>
-            <div id="pool-chat" class="pool-list"></div>
-            <div class="pool-add">
-              <select id="add-chat-provider" class="input"></select>
-              <select id="add-chat-model" class="input"><option value="">选择模型...</option></select>
-              <input id="add-chat-model-custom" class="input hidden" placeholder="模型 ID" autocomplete="off" spellcheck="false">
-              <button class="btn" data-add="chat">添加</button>
-            </div>
-          </div>
-          <div class="scene-block">
-            <div class="scene-block-head">多智能体研究</div>
-            <div id="pool-research" class="pool-list"></div>
-            <div class="pool-add">
-              <select id="add-research-provider" class="input"></select>
-              <select id="add-research-model" class="input"><option value="">选择模型...</option></select>
-              <input id="add-research-model-custom" class="input hidden" placeholder="模型 ID" autocomplete="off" spellcheck="false">
-              <button class="btn" data-add="research">添加</button>
-            </div>
-          </div>
-          <div class="scene-block">
-            <div class="scene-block-head">知识库 embedding</div>
-            <div id="pool-kb" class="pool-list"></div>
-            <div class="pool-add">
-              <select id="add-kb-provider" class="input"></select>
-              <select id="add-kb-model" class="input"><option value="">选择模型...</option></select>
-              <input id="add-kb-model-custom" class="input hidden" placeholder="模型 ID" autocomplete="off" spellcheck="false">
-              <button class="btn" data-add="kb">添加</button>
-            </div>
           </div>
         </div>
         <div class="card card-span">
@@ -275,9 +390,7 @@
           <div class="section-title">运行环境</div>
           <p class="muted">当前生效配置的摘要，用于排查问题。</p>
           <table class="kv">
-            <tr><td>智能对话模型</td><td id="set-chat-model">-</td></tr>
-            <tr><td>研究模型</td><td id="set-research-model">-</td></tr>
-            <tr><td>知识库 embedding</td><td id="set-kb-model">-</td></tr>
+            <tr><td>当前模型</td><td id="set-current-model">-</td></tr>
             <tr><td>服务状态</td><td id="set-srv">-</td></tr>
             <tr><td>自定义 API</td><td id="set-custom">-</td></tr>
           </table>
@@ -286,7 +399,6 @@
           <div class="section-title">数据位置</div>
           <table class="kv">
             <tr><td>历史报告</td><td><code>data/reports/</code></td></tr>
-            <tr><td>知识库向量</td><td><code>data/chroma_db/</code></td></tr>
             <tr><td>论文 PDF</td><td><code>data/papers/</code></td></tr>
             <tr><td>界面配置</td><td><code>data/ui_prefs.json</code></td></tr>
           </table>
@@ -295,16 +407,17 @@
       <div class="card">
         <div class="section-title">使用提示</div>
         <ul class="tips">
-          <li>每个功能的模型在「各功能模型」中配置，可添加多个随时切换</li>
-          <li>各提供商的 API Key 与地址在「模型提供商」中填写</li>
-          <li>左侧「模型配置」跟随当前界面，只显示该功能在用的模型</li>
-          <li>历史报告可在研究页直接删除</li>
+          <li>全站使用同一个模型：在「模型提供商」中填写 Key / 地址后即生效</li>
+          <li>自定义 API 需填写 Base URL、API Key 与默认模型名</li>
+          <li>模型不可用时，左侧「测试连接」会给出具体原因</li>
+          <li>历史报告可在「参考文献调研」页直接删除</li>
         </ul>
       </div>
     </section>
 
   </main>
 </div>
-<script src="/app.js?v=2.1.0"></script>
+<script src="/app.js?v=2.5.0"></script>
+<script src="/paper.js?v=1.0.1"></script>
 </body>
 </html>

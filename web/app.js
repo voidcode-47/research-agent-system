@@ -94,16 +94,14 @@ function renderMarkdown(text) {
 }
 
 // ---------- 页面导航（零重载） ----------
-const PAGES = ["chat", "research", "knowledge", "settings"];
+const PAGES = ["paper", "chat", "research", "knowledge", "settings"];
 function switchPage(name) {
-  if (!PAGES.includes(name)) name = "chat";
+  if (!PAGES.includes(name)) name = "paper";
   document.querySelectorAll(".nav-item").forEach((b) => {
     b.classList.toggle("active", b.dataset.page === name);
   });
   document.querySelectorAll(".view").forEach((v) => v.classList.remove("active"));
   $(`view-${name}`).classList.add("active");
-  // 左侧模型配置跟随当前界面切换（对话/研究/知识库各用各的模型）
-  syncSidebarScene();
 }
 document.getElementById("nav").addEventListener("click", (e) => {
   const btn = e.target.closest(".nav-item");
@@ -119,112 +117,48 @@ const store = {
   set(key, val) { try { localStorage.setItem(key, JSON.stringify(val)); } catch (e) {} },
 };
 
-let providersInfo = null; // {providers, labels, current_provider, current_model, custom_models, custom_api, scene_models}
-
-// ---------- 分场景模型（池） ----------
-// 页面 → 场景：智能对话→chat，多智能体研究→research，知识库→kb，设置→chat
-const SCENE_BY_PAGE = { chat: "chat", research: "research", knowledge: "kb", settings: "chat" };
-const SCENE_LABELS = { chat: "智能对话", research: "多智能体研究", kb: "知识库" };
-let currentScene = "chat";
-
-function sceneModelOf(scene) {
-  const sm = (providersInfo && providersInfo.scene_models) || {};
-  const e = sm[scene] || {};
-  return {
-    provider: e.provider || "",
-    model: e.model || "",
-    models: Array.isArray(e.models) ? e.models : [],
-  };
-}
+let providersInfo = null; // {providers, labels, current_provider, current_model, custom_api}
 
 function modelDisplay(p, m) {
   const label = (providersInfo && providersInfo.labels?.[p]) || p || "未设置";
   return m ? `${label} · ${m}` : `${label} · 默认模型`;
 }
 
-function fillProviderOptions(sel, selected) {
-  sel.innerHTML = "";
-  for (const p of providersInfo.providers) {
-    const opt = document.createElement("option");
-    opt.value = p;
-    opt.textContent = providersInfo.labels[p] || p;
-    sel.appendChild(opt);
-  }
-  if (selected && providersInfo.providers.includes(selected)) sel.value = selected;
+// 全局模型：自定义 API 的模型名单独保存，优先展示
+function currentProviderModel() {
+  if (!providersInfo) return { provider: "", model: "" };
+  const provider = providersInfo.current_provider
+    || (providersInfo.custom_api?.api_key ? "custom" : "")
+    || "";
+  const model = provider === "custom"
+    ? (providersInfo.custom_api?.model || providersInfo.current_model || "")
+    : (providersInfo.current_model || "");
+  return { provider, model };
 }
 
-// 侧边栏：只显示当前功能在用的模型；下拉列出该功能的模型池，选择即切换
-function syncSidebarScene() {
-  if (!providersInfo) return;
-  const page = document.querySelector(".nav-item.active")?.dataset.page || "chat";
-  currentScene = SCENE_BY_PAGE[page] || "chat";
-  $("scene-label").textContent = SCENE_LABELS[currentScene];
-  const sc = sceneModelOf(currentScene);
-  const sel = $("model-switch");
-  sel.innerHTML = "";
-  if (!sc.models.length) {
-    const opt = document.createElement("option");
-    opt.value = "";
-    opt.textContent = "（未配置，点「添加模型」）";
-    sel.appendChild(opt);
-    return;
-  }
-  let activeIdx = sc.models.findIndex((e) => e.provider === sc.provider && e.model === sc.model);
-  if (activeIdx < 0) activeIdx = 0;
-  sc.models.forEach((e, i) => {
-    const opt = document.createElement("option");
-    opt.value = String(i);
-    opt.textContent = modelDisplay(e.provider, e.model);
-    sel.appendChild(opt);
-  });
-  sel.value = String(activeIdx);
-}
-
-// 当前侧边栏选中的池内模型
-function selectedPoolModel() {
-  const idx = parseInt($("model-switch").value, 10);
-  const sc = sceneModelOf(currentScene);
-  return sc.models[idx] || null;
+function renderCurrentModel() {
+  const { provider, model } = currentProviderModel();
+  $("model-current").textContent = provider
+    ? modelDisplay(provider, model)
+    : "（未配置，点「去设置」）";
 }
 
 // 拉取提供商信息并重渲染所有依赖它的界面块
 async function loadProviders() {
   providersInfo = await api("/api/providers");
-  syncSidebarScene();
+  renderCurrentModel();
   updateSettingsTable();
-  renderScenePools();
   renderProviderConfig();
 }
 
-// 切换某场景当前使用的模型（写入 scene_models[scene].provider/model）
-async function saveActiveModel(scene, provider, model) {
-  const payload = {};
-  payload[scene + "_provider"] = provider;
-  payload[scene + "_model"] = model;
-  const r = await postJSON("/api/settings", payload);
-  await loadProviders();
-  return r;
-}
-
 // ---------- 侧边栏事件 ----------
-// 切换当前功能的模型（池内选择即保存）
-$("model-switch").addEventListener("change", async () => {
-  const m = selectedPoolModel();
-  if (!m) return;
-  setConn("保存中...", "pending");
-  try {
-    await saveActiveModel(currentScene, m.provider, m.model);
-    setConn("✅ 已切换", "ok");
-  } catch (e) { setConn(`❌ ${e.message}`, "err"); }
-});
-
 $("btn-test").addEventListener("click", async () => {
-  const m = selectedPoolModel();
-  if (!m) { setConn("未配置模型，请先在设置页添加", "err"); return; }
+  const { provider, model } = currentProviderModel();
+  if (!provider) { setConn("未配置模型，请先在设置页填写 API Key", "err"); return; }
   setConn("检测中...", "pending");
   try {
-    // 用已保存的 Key / URL 测试当前功能选中的模型
-    const r = await postJSON("/api/health-check", { provider: m.provider, model: m.model || null });
+    // 用已保存的 Key / URL 测试全局模型
+    const r = await postJSON("/api/health-check", { provider, model: model || null });
     if (r.model_ready) setConn(`✅ ${r.detail}`, "ok");
     else if (r.reachable) setConn(`⚠️ ${r.detail}`, "warn");
     else setConn(`❌ ${r.detail}`, "err");
@@ -295,14 +229,11 @@ function getChatConfig() {
   // multiple select：全选无值时回退默认
   const toolsAll = ["web_search_cn", "academic_search", "web_scraper"];
   const sel = tools.length ? tools : toolsAll;
-  // 对话固定用「智能对话」场景配置的模型
-  const sc = sceneModelOf("chat");
+  // provider/model 留空：后端统一使用全局模型
   return {
     mode: $("chat-mode").value,
     tools: sel,
     use_rag: $("chat-rag").checked,
-    provider: sc.provider || null,
-    model: sc.model || null,
   };
 }
 
@@ -633,13 +564,13 @@ $("session-list").addEventListener("click", (e) => {
 
 renderChatSessions();
 
-// ---------- 研究页 ----------
+// ---------- 参考文献调研 ----------
 let researchPoll = null;
+let researchTaskId = null;
 let currentReport = null; // {name, text}
+let lastRefsKey = "";
 
-$("iters").addEventListener("input", () => ($("v-iters").textContent = $("iters").value));
 $("results").addEventListener("input", () => ($("v-results").textContent = $("results").value));
-$("v-iters").textContent = $("iters").value;
 $("v-results").textContent = $("results").value;
 
 function logLine(text) {
@@ -650,37 +581,129 @@ function logLine(text) {
   el.scrollTop = el.scrollHeight;
 }
 
+const STAGE_LABELS = {
+  starting: "准备检索",
+  search: "检索参考文献",
+  write: "生成综合报告",
+  save: "保存报告",
+  done: "已完成",
+  cancelled: "已取消",
+  error: "调研失败",
+};
+
+function setResearchRunning(running) {
+  $("btn-research").disabled = running;
+  $("btn-research-cancel").classList.toggle("hidden", !running);
+  $("btn-research-cancel").disabled = false;
+}
+
+function setResearchProgress(progress, stage, isError) {
+  const n = Number(progress);
+  const pct = Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0;
+  const fill = $("research-progress-fill");
+  const cancelled = stage === "cancelled";
+  fill.style.width = pct + "%";
+  fill.classList.toggle("is-error", !!isError);
+  fill.classList.toggle("is-cancelled", cancelled);
+  fill.classList.toggle("is-running", !isError && !cancelled && pct > 0 && pct < 100);
+  $("research-percent").textContent = pct + "%";
+  if (cancelled) {
+    $("research-stage").textContent = "⏹ 已取消调研";
+    return;
+  }
+  const label = STAGE_LABELS[stage] || "处理中";
+  if (isError) $("research-stage").textContent = `❌ ${label}`;
+  else if (pct >= 100) $("research-stage").textContent = "✅ 调研完成";
+  else $("research-stage").textContent = `${label}...`;
+}
+
+function applyResearchTask(t) {
+  const cancelled = t.status === "cancelled";
+  const failed = t.status === "error" || t.status === "failed";
+  const done = t.status === "done";
+  setResearchProgress(t.progress || 0, cancelled ? "cancelled" : t.stage, failed);
+  renderResearchRefs(t.references || []);
+  $("research-logs").innerHTML = "";
+  for (const l of t.logs || []) logLine(l);
+  return { cancelled, failed, done };
+}
+
+function renderResearchRefs(refs) {
+  if (!Array.isArray(refs) || !refs.length) return;
+  $("research-refs").classList.remove("hidden");
+  $("research-ref-count").textContent = `共 ${refs.length} 篇`;
+  const key = refs.map((r) => r.title).join("|");
+  if (key === lastRefsKey) return;
+  lastRefsKey = key;
+  $("research-ref-list").innerHTML = refs.map((r, i) => {
+    const link = /^https?:\/\//i.test(r.url || "") ? r.url
+      : (r.doi ? `https://doi.org/${r.doi}` : "");
+    const meta = [r.authors, r.year, r.journal].filter(Boolean).map(esc).join(" · ");
+    const extra = [r.cited_by ? `被引 ${r.cited_by}` : "",
+      r.doi ? `DOI: ${esc(r.doi)}` : ""].filter(Boolean).join(" · ");
+    const oa = r.oa ? '<span class="tag-ok">开放获取</span>' : "";
+    const abs = r.abstract ? `<p class="ref-abstract">${esc(r.abstract)}</p>` : "";
+    return `<div class="research-ref">
+      <div class="ref-index">[${i + 1}]</div>
+      <div class="ref-body">
+        <div class="ref-title">${link
+          ? `<a href="${esc(link)}" target="_blank" rel="noopener noreferrer">${esc(r.title)}</a>`
+          : esc(r.title)}</div>
+        ${meta ? `<div class="ref-meta">${meta}</div>` : ""}
+        ${(extra || oa) ? `<div class="ref-meta">${extra} ${oa}</div>` : ""}
+        ${abs}
+      </div>
+    </div>`;
+  }).join("");
+}
+
 $("btn-research").addEventListener("click", async () => {
   const topic = $("research-topic").value.trim();
-  if (!topic) { alert("请输入研究主题"); return; }
+  if (!topic) { alert("请输入论文方向或研究主题"); return; }
   if (researchPoll) { clearInterval(researchPoll); researchPoll = null; }
 
-  $("btn-research").disabled = true;
+  lastRefsKey = "";
+  researchTaskId = null;
+  setResearchRunning(true);
   $("research-progress").classList.remove("hidden");
+  $("research-refs").classList.add("hidden");
   $("research-result").classList.add("hidden");
+  $("research-ref-list").innerHTML = "";
   $("research-logs").innerHTML = "";
-
-  // 研究固定用「多智能体研究」场景配置的模型
-  const sr = sceneModelOf("research");
-  const provider = sr.provider || null;
-  const model = sr.model || null;
+  setResearchProgress(0, "starting", false);
 
   try {
     const r = await postJSON("/api/research", {
       topic,
-      max_iterations: parseInt($("iters").value, 10),
       max_results: parseInt($("results").value, 10),
-      use_rag: $("rag-use").checked,
       detailed: $("report-style").value === "detailed",
-      pre_search: $("pre-search").checked,
-      auto_ingest: $("auto-ingest").checked,
-      provider,
-      model,
     });
+    researchTaskId = r.task_id;
     pollResearch(r.task_id);
   } catch (e) {
+    setResearchProgress(0, "error", true);
     logLine(`❌ 启动失败：${e.message}`);
-    $("btn-research").disabled = false;
+    setResearchRunning(false);
+  }
+});
+
+$("btn-research-cancel").addEventListener("click", async () => {
+  if (!researchTaskId) return;
+  const taskId = researchTaskId;
+  $("btn-research-cancel").disabled = true;
+  try {
+    const t = await postJSON(`/api/research/${taskId}/cancel`, {});
+    if (researchPoll) { clearInterval(researchPoll); researchPoll = null; }
+    const state = applyResearchTask(t);
+    setResearchRunning(false);
+    researchTaskId = null;
+    if (state.done) {
+      showReport(t.report, t.report_file);
+      loadReports();
+    }
+  } catch (e) {
+    $("btn-research-cancel").disabled = false;
+    alert(`取消失败：${e.message}`);
   }
 });
 
@@ -688,21 +711,23 @@ function pollResearch(taskId) {
   researchPoll = setInterval(async () => {
     try {
       const t = await api(`/api/research/${taskId}`);
-      $("research-logs").innerHTML = "";
-      for (const l of t.logs) logLine(l);
-      if (t.status === "done") {
+      const state = applyResearchTask(t);
+      if (state.done) {
         clearInterval(researchPoll); researchPoll = null;
-        $("btn-research").disabled = false;
+        setResearchRunning(false);
+        researchTaskId = null;
         showReport(t.report, t.report_file);
-      } else if (t.status === "error" || t.status === "failed") {
+        loadReports();
+      } else if (state.cancelled || state.failed) {
         clearInterval(researchPoll); researchPoll = null;
-        $("btn-research").disabled = false;
-        logLine(`\n${t.error || "研究失败"}`);
+        setResearchRunning(false);
+        researchTaskId = null;
+        if (state.failed) logLine(`\n${t.error || "调研失败"}`);
       }
     } catch (e) {
       // 瞬时失败忽略，继续轮询
     }
-  }, 1500);
+  }, 1000);
 }
 
 function showReport(text, name) {
@@ -742,10 +767,6 @@ $("btn-followup").addEventListener("click", async () => {
   $("btn-followup").disabled = true;
   const ans = $("followup-answer");
   ans.innerHTML = "<p class=\"muted\">思考中...</p>";
-  // 追问属于对话场景（研究报告问答走对话模型）
-  const sc = sceneModelOf("chat");
-  const provider = sc.provider || null;
-  const model = sc.model || null;
   try {
     const msgs = [
       { role: "system", content: "你是研究助手。基于用户提供的研究报告回答追问。要求：回答具体、有依据；引用报告中已有的来源编号 [n]；若报告信息不足，明确说明并给出建议的补充检索方向，不要编造。" },
@@ -755,7 +776,7 @@ $("btn-followup").addEventListener("click", async () => {
     const resp = await fetch("/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: msgs, mode: "chat", tools: [], use_rag: false, provider, model }),
+      body: JSON.stringify({ messages: msgs, mode: "chat", tools: [], use_rag: false }),
     });
     // 与 sendChat 保持一致：非 2xx 时后端返回的是 JSON 错误体，
     // 直接读流会解析不到任何 data: 行，最终误显示为"（无回复）"
@@ -948,193 +969,42 @@ $("btn-kb-search").addEventListener("click", async () => {
 // ---------- 设置页 ----------
 function updateSettingsTable() {
   if (!providersInfo) return;
-  const sm = providersInfo.scene_models || {};
-  const fmt = (s) => {
-    const e = sm[s] || {};
-    if (!e.provider && !e.model) return "未设置";
-    const label = providersInfo.labels[e.provider] || e.provider;
-    return `${label} / ${e.model || "默认"}`;
-  };
-  $("set-chat-model").textContent = fmt("chat");
-  $("set-research-model").textContent = fmt("research");
-  $("set-kb-model").textContent = fmt("kb");
+  const { provider, model } = currentProviderModel();
+  $("set-current-model").textContent = provider
+    ? modelDisplay(provider, model)
+    : "未配置";
   const cus = providersInfo.custom_api;
   $("set-custom").textContent = cus && cus.base_url ? `${cus.base_url} / ${cus.api_key ? "已填 Key" : "未填 Key"}` : "未配置";
-  // 研究默认参数回填
+  // 调研默认参数回填
   const rp = providersInfo.research_prefs || {};
-  if (rp.max_iterations) { $("set-iters").value = rp.max_iterations; $("set-v-iters").textContent = rp.max_iterations; }
-  if (rp.max_results) { $("set-results").value = rp.max_results; $("set-v-results").textContent = rp.max_results; }
+  if (rp.max_results) { $("set-results").value = Math.min(10, Math.max(5, rp.max_results)); $("set-v-results").textContent = $("set-results").value; }
   if (rp.detailed !== undefined) $("set-style").value = rp.detailed ? "detailed" : "standard";
-  if (rp.use_rag !== undefined) $("set-rag").checked = rp.use_rag;
-  if (rp.pre_search !== undefined) $("set-presearch").checked = rp.pre_search;
-  if (rp.auto_ingest !== undefined) $("set-autoingest").checked = rp.auto_ingest;
 }
 
-$("set-iters").addEventListener("input", () => ($("set-v-iters").textContent = $("set-iters").value));
 $("set-results").addEventListener("input", () => ($("set-v-results").textContent = $("set-results").value));
 
 $("btn-save-research-settings").addEventListener("click", async () => {
   const statusEl = $("research-settings-status");
   try {
     await postJSON("/api/settings", {
-      research_max_iterations: parseInt($("set-iters").value, 10),
       research_max_results: parseInt($("set-results").value, 10),
       research_detailed: $("set-style").value === "detailed",
-      research_pre_search: $("set-presearch").checked,
-      research_auto_ingest: $("set-autoingest").checked,
-      research_use_rag: $("set-rag").checked,
     });
-    statusEl.textContent = "✅ 已保存，下次研究任务生效";
+    statusEl.textContent = "✅ 已保存，下次调研任务生效";
     setTimeout(() => (statusEl.textContent = ""), 3000);
   } catch (e) { statusEl.textContent = `❌ 保存失败：${e.message}`; }
 });
 
-// 研究页初始化：读取设置页保存的默认参数
+// 调研页初始化：读取设置页保存的默认参数
 function applyResearchDefaults() {
   if (!providersInfo) return;
   const rp = providersInfo.research_prefs || {};
-  if (rp.max_iterations) { $("iters").value = rp.max_iterations; $("v-iters").textContent = rp.max_iterations; }
-  if (rp.max_results) { $("results").value = rp.max_results; $("v-results").textContent = rp.max_results; }
+  if (rp.max_results) {
+    $("results").value = Math.min(10, Math.max(5, rp.max_results));
+    $("v-results").textContent = $("results").value;
+  }
   if (rp.detailed !== undefined) $("report-style").value = rp.detailed ? "detailed" : "standard";
-  if (rp.use_rag !== undefined) $("rag-use").checked = rp.use_rag;
-  if (rp.pre_search !== undefined) $("pre-search").checked = rp.pre_search;
-  if (rp.auto_ingest !== undefined) $("auto-ingest").checked = rp.auto_ingest;
 }
-
-// ---------- 设置页：各功能模型池 ----------
-const SCENES = ["chat", "research", "kb"];
-// 每个场景的添加行模型列表加载令牌：丢弃过期响应，避免旧结果填进新提供商
-const addModelToken = {};
-
-function flashStatus(text, ms) {
-  const el = $("scene-settings-status");
-  el.textContent = text;
-  setTimeout(() => { if (el.textContent === text) el.textContent = ""; }, ms || 2500);
-}
-
-// 渲染三个功能的模型池 + 添加行
-function renderScenePools() {
-  if (!providersInfo) return;
-  for (const scene of SCENES) {
-    const sc = sceneModelOf(scene);
-    const list = $("pool-" + scene);
-    list.innerHTML = "";
-    if (!sc.models.length) {
-      const empty = document.createElement("div");
-      empty.className = "pool-empty";
-      empty.textContent = "暂未配置模型，在下方添加";
-      list.appendChild(empty);
-    }
-    sc.models.forEach((e) => {
-      const active = e.provider === sc.provider && e.model === sc.model;
-      const row = document.createElement("div");
-      row.className = "pool-row" + (active ? " active" : "");
-      row.innerHTML =
-        `<span class="pool-name">${esc(modelDisplay(e.provider, e.model))}</span>` +
-        (active ? `<span class="badge-cur">当前</span>` : "") +
-        `<button class="btn btn-ghost" data-act="use" data-provider="${esc(e.provider)}" data-model="${esc(e.model)}"${active ? " disabled" : ""}>设为当前</button>` +
-        `<button class="btn btn-ghost pool-del" data-act="del" data-provider="${esc(e.provider)}" data-model="${esc(e.model)}" title="从列表移除">✕</button>`;
-      list.appendChild(row);
-    });
-    // 添加行：提供商重置，模型区回占位
-    fillProviderOptions($("add-" + scene + "-provider"), "");
-    const sel = $("add-" + scene + "-model");
-    const txt = $("add-" + scene + "-model-custom");
-    sel.classList.remove("hidden");
-    txt.classList.add("hidden");
-    sel.innerHTML = `<option value="">选择模型...</option>`;
-  }
-}
-
-// 添加行：按提供商加载模型列表（知识库场景列 embedding 模型）。
-// 无列表可用（custom / 本地服务未启动）→ 切换为手填输入框。
-async function loadAddModelOptions(scene) {
-  const provider = $("add-" + scene + "-provider").value;
-  const sel = $("add-" + scene + "-model");
-  const txt = $("add-" + scene + "-model-custom");
-  const token = (addModelToken[scene] = (addModelToken[scene] || 0) + 1);
-  sel.classList.remove("hidden");
-  txt.classList.add("hidden");
-  sel.innerHTML = `<option value="">加载中...</option>`;
-  if (!provider) { sel.innerHTML = `<option value="">先选提供商</option>`; return; }
-  const kind = scene === "kb" ? "embedding" : "llm";
-  let models = [];
-  try {
-    const data = await api(`/api/models?provider=${encodeURIComponent(provider)}&kind=${kind}`);
-    if (addModelToken[scene] !== token) return; // 已切换到其他提供商，丢弃过期响应
-    models = data.models || [];
-  } catch (e) {
-    if (addModelToken[scene] !== token) return;
-  }
-  if (provider === "custom" || !models.length) {
-    sel.classList.add("hidden");
-    txt.classList.remove("hidden");
-    txt.value = (provider === "custom"
-      ? providersInfo.custom_api?.model
-      : providersInfo.custom_models?.[provider]) || "";
-    return;
-  }
-  // 用户曾手填过的模型名也放进可选列表
-  const extra = providersInfo.custom_models?.[provider];
-  if (extra && !models.includes(extra)) models = [...models, extra];
-  sel.innerHTML = "";
-  for (const m of models) {
-    const opt = document.createElement("option");
-    opt.value = m; opt.textContent = m;
-    sel.appendChild(opt);
-  }
-}
-
-// 整体替换某场景的模型池
-async function savePool(scene, pool, okMsg) {
-  const payload = {};
-  payload[scene + "_models"] = pool;
-  try {
-    await postJSON("/api/settings", payload);
-    await loadProviders();
-    flashStatus(okMsg);
-  } catch (e) { flashStatus(`❌ ${e.message}`, 4000); }
-}
-
-for (const scene of SCENES) {
-  $("add-" + scene + "-provider").addEventListener("change", () => loadAddModelOptions(scene));
-
-  $("pool-" + scene).addEventListener("click", async (e) => {
-    const btn = e.target.closest("button[data-act]");
-    if (!btn || btn.disabled) return;
-    const p = btn.dataset.provider;
-    const m = btn.dataset.model;
-    if (btn.dataset.act === "use") {
-      try {
-        await saveActiveModel(scene, p, m);
-        flashStatus(`✅ 已切换：${modelDisplay(p, m)}`);
-      } catch (err) { flashStatus(`❌ ${err.message}`, 4000); }
-    } else {
-      const sc = sceneModelOf(scene);
-      const pool = sc.models.filter((x) => !(x.provider === p && x.model === m));
-      await savePool(scene, pool, "✅ 已移除");
-    }
-  });
-}
-
-// 添加按钮：把 (提供商, 模型) 追加进该功能的池
-document.querySelectorAll("button[data-add]").forEach((btn) => {
-  btn.addEventListener("click", async () => {
-    const scene = btn.dataset.add;
-    const provider = $("add-" + scene + "-provider").value;
-    if (!provider) { flashStatus("请先选择提供商", 3000); return; }
-    const sel = $("add-" + scene + "-model");
-    const txt = $("add-" + scene + "-model-custom");
-    const model = (sel.classList.contains("hidden") ? txt.value : sel.value).trim();
-    const sc = sceneModelOf(scene);
-    if (sc.models.some((x) => x.provider === provider && x.model === model)) {
-      flashStatus("该模型已在列表中", 3000);
-      return;
-    }
-    const pool = [...sc.models, { provider, model }];
-    await savePool(scene, pool, "✅ 已添加");
-  });
-});
 
 // ---------- 设置页：模型提供商（Key / Base URL 集中配置） ----------
 const PROVIDER_ORDER = ["deepseek", "zhipu", "qwen", "custom", "ollama", "lmstudio"];
@@ -1242,8 +1112,12 @@ async function checkServer() {
   try { await loadProviders(); } catch (e) { console.error(e); }
   renderChatHistory();
   applyResearchDefaults();
-  switchPage("chat");
+  switchPage("paper");
+  if (typeof initPaperPage === "function") initPaperPage();
+  else window.addEventListener("load", () => {
+    if (typeof initPaperPage === "function") initPaperPage();
+  });
   loadReports();
-  loadKb();
+  // 知识库入口已下线，不再初始化，避免无谓的 embedding 调用
   setInterval(checkServer, 30000);
 })();

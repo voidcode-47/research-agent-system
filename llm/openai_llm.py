@@ -81,12 +81,14 @@ class OpenAICompatibleLLM(BaseLLM):
         tools: Optional[list[dict]] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> ChatResponse:
         """同步对话。
 
         Args:
             max_tokens: 输出上限。本地模型（LM Studio/Ollama）默认输出很短（约 512
                 tokens），生成报告会被截断；默认给 4096，报告生成可传更大值。
+            timeout: 单次请求超时（秒）。长报告生成需要大于客户端默认 60 秒。
         """
         kwargs: dict = {
             "model": self.model,
@@ -95,6 +97,8 @@ class OpenAICompatibleLLM(BaseLLM):
         }
         if max_tokens:
             kwargs["max_tokens"] = max_tokens
+        if timeout:
+            kwargs["timeout"] = timeout
         if tools:
             kwargs["tools"] = self._format_tools(tools)
 

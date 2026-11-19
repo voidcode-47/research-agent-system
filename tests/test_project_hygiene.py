@@ -18,6 +18,12 @@ SECRET_ALLOWED = {".env"}
 
 SKIP_DIRS = {"__pycache__", ".pytest_cache", ".git", ".venv", "venv", "env"}
 SKIP_SUFFIXES = {".pyc", ".pyo", ".bin", ".sqlite3", ".db", ".docx"}
+# 本地运行时数据（已 gitignore），包含用户上传内容，不属于可公开文件
+SKIP_DATA_PREFIXES = (
+    "data/papers/", "data/reports/", "data/uploads/",
+    "data/cache/", "data/chroma_db/",
+)
+SKIP_DATA_FILES = {"data/quota.json", "data/ui_prefs.json", "data/kb_names.json"}
 
 PATTERNS = {
     "OpenAI 风格 API Key": re.compile(r"sk-[A-Za-z0-9_-]{10,}"),
@@ -36,7 +42,12 @@ def _iter_scannable_files():
         if not p.is_file():
             continue
         rel = p.relative_to(ROOT)
+        posix = rel.as_posix()
         if any(part in SKIP_DIRS for part in rel.parts):
+            continue
+        if any(posix.startswith(prefix) for prefix in SKIP_DATA_PREFIXES):
+            continue
+        if posix in SKIP_DATA_FILES:
             continue
         if rel.name in SECRET_ALLOWED:
             continue
