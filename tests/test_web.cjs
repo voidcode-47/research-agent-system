@@ -6,6 +6,153 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 
+test("translated results from an old server cannot be shown as adoptable rewrites", () => {
+  const { context, elements, run } = loadPage();
+  const result = { original: "This study compares software testing methods on public datasets.",
+    revised: "本研究比较了公开数据集上的软件测试方法。", diff: [] };
+  context.result = result;
+  run("paperState.rewrite = result");
+  context.pwRenderDiff(result);
+  assert.equal(run("paperState.rewrite"), null);
+  assert.equal(elements.get("btn-paper-adopt").classList.contains("hidden"), true);
+  assert.match(elements.get("paper-rewrite-warning").textContent, /语言/);
+});
+
+test("batch adoption refuses translated results without sending a save request", async () => {
+  const { context, elements, run } = loadPage();
+  let calls = 0;
+  context.fetch = async () => { calls++; throw new Error("unexpected request"); };
+  run(`paperState.paperId = "p_test"; paperState.step = 5;
+    paperState.batchResults = [{paragraph_id: "p1", original: "This study compares methods on public datasets.", revised: "本研究比较了公开数据集上的方法。"}];`);
+  await context.pwAdoptBatch();
+  assert.equal(calls, 0);
+  assert.match(elements.get("paper-alert").textContent, /语言/);
+});
+
+test("custom service exposes a direct switch action for each model", async () => {
+  const { context, elements, run } = loadPage();
+  run(`authInfo.can_manage_models = true;
+    providersInfo = { read_only: false, effective_provider: "custom:s1", effective_model: "m1",
+      providers: ["custom:s1"], labels: {}, local_api: {},
+      custom_services: [{ id: "s1", name: "Gateway", protocol: "openai", models: ["m1", "m2"], default_model: "m1" }] };
+    renderProviderConfig();`);
+  assert.match(elements.get("custom-provider-list").innerHTML, /data-service-action="use"[^>]*data-model="m2"/);
+  let sent;
+  context.fetch = async (url, opts) => {
+    sent = JSON.parse(opts.body);
+    return { ok: true, json: async () => ({ ok: true }) };
+  };
+  context.loadProviders = async () => {};
+  const button = { dataset: { serviceAction: "use", serviceId: "s1", model: "m2" } };
+  await elements.get("custom-provider-list").dispatch("click", { target: { closest: () => button } });
+  assert.deepEqual(sent, { provider: "custom:s1", model: "m2" });
+});
+
+test("diagnosis always shows four dimensions including unfinished ones", () => {
+  const { context, elements } = loadPage();
+  context.pwRenderDiagnosis({ level: { score: 80 } }, 80);
+  assert.equal(elements.get("paper-dim-cards").children.length, 4);
+});
+
+test("retrying a partial diagnosis only requests missing or stale dimensions", async () => {
+  const { context, run } = loadPage();
+  run(`paperState.paperId = "p_test";
+    paperState.paper = { requirement: { confirmed: true }, analysis_results: {
+      feasibility: { score: 80 }, format: { score: 70 }, deai: { score: 90 }
+    } };`);
+  context.pwPollDiagnose = () => {};
+  let sent;
+  context.fetch = async (url, opts) => {
+    sent = JSON.parse(opts.body);
+    return { ok: true, json: async () => ({ task_id: "task" }) };
+  };
+  await context.pwStartDiagnose();
+  assert.deepEqual(sent.dimensions, ["level"]);
+});
+
+test("markdown keeps ordered and unordered lists distinct", () => {
+  const { context } = loadPage();
+  assert.match(context.renderMarkdown("1. first\n2. second\n- other"), /<ol>\s*<li>first<\/li>\s*<li>second<\/li>\s*<\/ol>\s*<ul>/);
+});
+
+test("late paper detail cannot replace a newer selection or a new paper", async () => {
+  const { context, run } = loadPage();
+  let finish;
+  context.api = () => new Promise(resolve => { finish = resolve; });
+  const pending = context.pwLoadPaper("old");
+  run('pwResetPaper()');
+  finish({ title: "old" });
+  await pending;
+  assert.equal(run('paperState.paperId'), "");
+});
+
+test("paper selection uses the latest request and clears the previous section filter", async () => {
+  const { context, elements, run } = loadPage();
+  const pending = new Map();
+  context.api = url => new Promise(resolve => pending.set(url, resolve));
+  for (const name of ["pwLoadParagraphs", "pwLoadGuideline", "pwLoadSimilar", "pwEnsurePaperOption"]) {
+    context[name] = async () => {};
+  }
+  elements.get("paper-section-filter").value = "old-section";
+  const old = context.pwLoadPaper("old");
+  const latest = context.pwLoadPaper("new");
+  pending.get("/api/paper/new")({ title: "new" });
+  await latest;
+  pending.get("/api/paper/old")({ title: "old" });
+  await old;
+  assert.equal(run('paperState.paperId'), "new");
+  assert.equal(elements.get("paper-section-filter").value, "");
+});
+
+test("late paragraph and guideline responses cannot change another paper", async () => {
+  const { context, run } = loadPage();
+  const pending = [];
+  context.api = () => new Promise(resolve => pending.push(resolve));
+  run('paperState.paperId = "old"');
+  const paragraphs = context.pwLoadParagraphs();
+  const guideline = context.pwLoadGuideline();
+  run('paperState.paperId = "new"');
+  pending[0]({ paragraphs: [{ id: "old", type: "body" }], sections: [] });
+  pending[1]({ guideline: { summary: "old" } });
+  await Promise.all([paragraphs, guideline]);
+  assert.equal(run('paperState.paragraphs.length'), 0);
+  assert.equal(run('paperState.guideline'), null);
+});
+
+test("late question answer does not replace the new paper answer", async () => {
+  const { context, elements, run } = loadPage();
+  let finish;
+  context.fetch = () => new Promise(resolve => { finish = resolve; });
+  run('paperState.paperId = "old"');
+  elements.get("paper-ask-input").value = "question";
+  const pending = context.pwAsk();
+  run('pwResetPaper(); paperState.paperId = "new"');
+  elements.get("paper-ask-answer").innerHTML = "new answer";
+  finish({ ok: true, json: async () => ({ answer: "old answer" }) });
+  await pending;
+  assert.equal(elements.get("paper-ask-answer").innerHTML, "new answer");
+});
+
+test("similar paper links reject executable URL schemes", () => {
+  const { context, elements } = loadPage();
+  context.pwRenderSimilar({ items: [{ title: "unsafe", url: "javascript:alert(1)" }] });
+  assert.doesNotMatch(elements.get("paper-similar-list").innerHTML, /href="javascript:/);
+});
+
+test("wizard marks unavailable steps disabled and identifies the current step", () => {
+  const { context } = loadPage();
+  const steps = [1, 2, 3].map(step => ({
+    dataset: { step: String(step) }, classList: { toggle() {} },
+    setAttribute(name, value) { this[name] = value; },
+  }));
+  context.document.querySelectorAll = selector => selector === ".paper-step" ? steps : [];
+  context.pwSetStep(1);
+  assert.equal(steps[0].disabled, false);
+  assert.equal(steps[0]["aria-current"], "step");
+  assert.equal(steps[1].disabled, true);
+  assert.equal(steps[2].disabled, true);
+});
+
 // 加载真实脚本；仅替换浏览器和网络边界，不复制业务函数。
 function loadPage() {
   const web = path.join(__dirname, "..", "web");

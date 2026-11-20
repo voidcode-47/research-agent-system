@@ -5,6 +5,8 @@
 """
 import asyncio
 import datetime
+import contextvars
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import os
 import queue
@@ -1095,8 +1097,16 @@ def api_put_requirement(paper_id: str, body: RequirementBody):
 # ---------------------------------------------------------------------------
 def _diagnose_worker(task_id: str, paper_id: str, dimensions: list[str]) -> None:
     task = PAPER_TASKS[task_id]
+    partial = {}
 
     def progress(stage: str, msg: str, percent=None) -> None:
+        for dim, config in DIAGNOSIS_DIMENSIONS.items():
+            if msg.startswith(f"完成：{config['label']}"):
+                result = store.load_analysis(paper_id, dim)
+                if result:
+                    partial[dim] = result
+                    with _TASK_LOCK:
+                        task["report"] = {"dimensions": dict(partial), "total_score": None}
         _log(task, stage, msg)
         if percent is not None:
             task["progress"] = max(int(task.get("progress") or 0),
@@ -1136,14 +1146,14 @@ def _diagnose_worker(task_id: str, paper_id: str, dimensions: list[str]) -> None
 def api_start_diagnose(paper_id: str, body: DiagnoseBody, request: Request):
     _paper_or_404(paper_id)
     _confirmed_requirement(paper_id)
-    dims = body.dimensions or list(DIAGNOSIS_DIMENSIONS)
+    dims = list(dict.fromkeys(body.dimensions or list(DIAGNOSIS_DIMENSIONS)))
     bad = [d for d in dims if d not in DIAGNOSIS_DIMENSIONS]
     if bad:
         raise HTTPException(400, f"未知诊断维度：{', '.join(bad)}")
     key = "diagnose:" + ",".join(sorted(dims))
     task_id = _launch(
         "diagnose", paper_id, key, _diagnose_worker, dims,
-        quota_amount=len(dims),
+        quota_amount=sum(d != "format" for d in set(dims)),
         quota_unlimited=bool(getattr(request.state, "admin_user", "")),
     )
     return {"task_id": task_id}
@@ -1486,34 +1496,46 @@ def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
         guide = store.load_rewrite_guide(paper_id) if use_guideline else None
         guide_text = guideline_text(guide) if guide else ""
         llm = _create_llm()
-        stopped_by_quota = False
-        for idx, pid in enumerate(paragraph_ids, start=1):
-            if cancelled():
-                break
-            _log(task, "batch", f"正在改写第 {idx}/{total} 段（{pid}）…")
+        quota_stop = threading.Event()
+
+        def rewrite_one(pid):
+            if cancelled() or quota_stop.is_set():
+                return None
             target = paragraphs.get(pid)
             if target is None:
-                errors.append({"paragraph_id": pid, "error": "段落不存在"})
-                continue
+                raise ValueError("段落不存在")
             if target.get("type") not in (None, "body") or target.get("table_id"):
-                errors.append({"paragraph_id": pid, "error": "仅正文段落支持改写"})
-                continue
+                raise ValueError("仅正文段落支持改写")
             try:
                 result = rewrite_paragraph(
                     llm, target.get("text") or "", requirement,
                     mode=mode, instruction=instruction, paper_id=paper_id,
                     guideline=guide_text, version=version,
                 )
-                result["paragraph_id"] = pid
-                items.append(result)
-            except quota.QuotaExceeded as e:
-                errors.append({"paragraph_id": pid, "error": str(e)})
-                stopped_by_quota = True
-                break
-            except Exception as e:
-                logger.warning(f"批量改写失败 {pid}: {e}")
-                errors.append({"paragraph_id": pid, "error": str(e)})
-            task["progress"] = 5 + int(90 * idx / max(1, total))
+            except quota.QuotaExceeded:
+                quota_stop.set()
+                raise
+            result["paragraph_id"] = pid
+            return result
+
+        workers = 1 if getattr(llm, "is_local", False) else min(3, max(1, total))
+        ordered = {}
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(contextvars.copy_context().run, rewrite_one, pid): (idx, pid)
+                       for idx, pid in enumerate(paragraph_ids)}
+            for done, future in enumerate(as_completed(futures), start=1):
+                idx, pid = futures[future]
+                try:
+                    result = future.result()
+                    if result is not None:
+                        ordered[idx] = result
+                except Exception as e:
+                    logger.warning(f"批量改写失败 {pid}: {e}")
+                    errors.append({"paragraph_id": pid, "error": str(e)})
+                task["progress"] = 5 + int(90 * done / max(1, total))
+                _log(task, "batch", f"已处理 {done}/{total} 段（{pid}）")
+        items = [ordered[idx] for idx in sorted(ordered)]
+        stopped_by_quota = quota_stop.is_set()
         report = {"items": items, "errors": errors}
         stop_message = f"已取消批量改写，已完成 {len(items)}/{total} 段"
         if cancelled():

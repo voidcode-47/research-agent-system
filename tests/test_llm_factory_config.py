@@ -18,6 +18,13 @@ def isolated_clients(monkeypatch):
     factory._llm_cache.clear()
 
 
+def test_default_factory_uses_saved_model_not_provider_default(monkeypatch):
+    from utils import prefs
+    monkeypatch.setattr(prefs, "load_prefs", lambda: {"provider": "ollama", "model": "chosen-model"})
+    llm = LLMFactory.create()
+    assert llm.model == "chosen-model"
+
+
 @pytest.mark.parametrize("provider", ["deepseek", "zhipu", "qwen"])
 def test_removed_cloud_provider_cannot_be_created(provider):
     with pytest.raises(ValueError, match="已移除"):

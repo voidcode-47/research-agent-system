@@ -74,9 +74,9 @@ function renderMarkdown(text) {
     } else if (/^&gt;\s?/.test(html)) {
       out.push(`<blockquote>${html.replace(/^&gt;\s?/, "")}</blockquote>`);
     } else if (/^\s*[-*]\s+/.test(html)) {
-      out.push(`<li>${html.replace(/^\s*[-*]\s+/, "")}</li>`);
+      out.push(`<li data-list="ul">${html.replace(/^\s*[-*]\s+/, "")}</li>`);
     } else if (/^\s*\d+[.、]\s+/.test(html)) {
-      out.push(`<li>${html.replace(/^\s*\d+[.、]\s+/, "")}</li>`);
+      out.push(`<li data-list="ol">${html.replace(/^\s*\d+[.、]\s+/, "")}</li>`);
     } else if (/^---+$/.test(html.trim())) {
       out.push("<hr>");
     } else {
@@ -88,9 +88,14 @@ function renderMarkdown(text) {
   let final = [];
   let listTag = null;
   for (const item of out) {
-    if (item.startsWith("<li>")) {
-      if (!listTag) { listTag = "ul"; final.push(`<${listTag}>`); }
-      final.push(item);
+    const list = item.match(/^<li data-list="(ul|ol)">/);
+    if (list) {
+      if (listTag !== list[1]) {
+        if (listTag) final.push(`</${listTag}>`);
+        listTag = list[1];
+        final.push(`<${listTag}>`);
+      }
+      final.push(item.replace(/^<li data-list="(?:ul|ol)">/, "<li>"));
     } else {
       if (listTag) { final.push(`</${listTag}>`); listTag = null; }
       final.push(item);
@@ -677,7 +682,8 @@ function renderProviderConfig() {
     const { id, name, protocol, models, default_model, has_api_key } = service;
     const active = provider === `custom:${id}`;
     const modelList = models.map((m) => `
-      <li><code>${esc(m)}</code>${m === default_model ? '<span class="muted">默认</span>' : ""}</li>`).join("");
+      <li><code>${esc(m)}</code>${m === default_model ? '<span class="muted">默认</span>' : ""}
+        <button type="button" class="btn btn-ghost" data-service-action="use" data-service-id="${esc(id)}" data-model="${esc(m)}" ${active && m === model ? "disabled" : ""}>${active && m === model ? "当前模型" : "使用此模型"}</button></li>`).join("");
     return `
       <div class="custom-service-row">
         <div class="prov-head">
@@ -881,6 +887,21 @@ $("custom-provider-list").addEventListener("click", async (e) => {
   if (!service) return;
   if (button.dataset.serviceAction === "edit") {
     openCustomProvider(service);
+    return;
+  }
+  if (button.dataset.serviceAction === "use") {
+    if (!service.models.includes(button.dataset.model)) return;
+    button.disabled = true;
+    const status = $("active-model-status");
+    try {
+      await postJSON("/api/settings", { provider: `custom:${service.id}`, model: button.dataset.model });
+      await loadProviders();
+      status.textContent = `已切换为 ${service.name} · ${button.dataset.model}，新任务立即生效`;
+    } catch (err) {
+      status.textContent = `切换失败：${err.message}`;
+    } finally {
+      button.disabled = false;
+    }
     return;
   }
   const active = currentProviderModel().provider === `custom:${service.id}`;

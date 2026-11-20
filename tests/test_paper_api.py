@@ -70,7 +70,7 @@ class _FakeLLM:
                 "suggestion": "改为具体陈述测试成本与缺陷分布。",
                 "reason": "空洞判断",
             }],
-            "revised": "改写后的段落：实验在公开数据集上完成，并报告了三次重复的均值。",
+            "revised": "We compare software testing methods on public datasets.",
             "reasons": ["删除空泛表述", "补充数据描述"],
             "terminology": [{
                 "term": "深度学习", "preferred": "深度学习（deep learning）",

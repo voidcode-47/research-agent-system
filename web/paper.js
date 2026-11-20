@@ -46,6 +46,9 @@ const paperState = {
   listTotal: 0,
   listHasMore: false,
   listSeq: 0,
+  loadSeq: 0,
+  paragraphSeq: 0,
+  askSeq: 0,
   listTimer: null,
   taskSources: new Set(),
 };
@@ -88,6 +91,8 @@ function pwSetStep(n, force) {
   paperState.step = n;
   document.querySelectorAll(".paper-step").forEach((b) => {
     const s = Number(b.dataset.step);
+    b.disabled = s > paperState.maxStep;
+    b.setAttribute("aria-current", s === n ? "step" : "false");
     b.classList.toggle("active", s === n);
     b.classList.toggle("done", s < paperState.maxStep);
   });
@@ -567,6 +572,9 @@ async function pwLoadList(opts = {}) {
 }
 
 function pwResetPaper() {
+  paperState.loadSeq++;
+  paperState.paragraphSeq++;
+  paperState.askSeq++;
   pwClearTimers();
   paperState.paperId = "";
   paperState.paper = null;
@@ -581,6 +589,9 @@ function pwResetPaper() {
   paperState.paragraphs = [];
   paperState.sections = [];
   paperState.tables = [];
+  $("paper-section-filter").value = "";
+  $("paper-select").value = "";
+  $("btn-paper-ask").disabled = false;
   pwCloseTable();
   $("paper-upload-result").innerHTML = "";
   $("paper-dim-cards").innerHTML = "";
@@ -632,7 +643,9 @@ function pwNewPaper() {
 }
 
 async function pwLoadPaper(paperId, opts = {}) {
+  const seq = ++paperState.loadSeq;
   const p = await api(`/api/paper/${encodeURIComponent(paperId)}`);
+  if (seq !== paperState.loadSeq) return;
   pwClearTimers();
   const prevPaperId = paperState.paperId;
   const samePaper = prevPaperId === paperId;
@@ -646,6 +659,9 @@ async function pwLoadPaper(paperId, opts = {}) {
       .catch(() => {});
   }
   if (!samePaper) {
+    paperState.askSeq++;
+    $("btn-paper-ask").disabled = false;
+    $("paper-section-filter").value = "";
     paperState.batchResults = [];
     paperState.batchErrors = [];
     paperState.batchIds = new Set();
@@ -720,6 +736,8 @@ async function pwLoadPaper(paperId, opts = {}) {
   }
   const analyzed = p.analyzed || {};
   const done = Object.keys(analyzed).filter((k) => analyzed[k]).length;
+  $("btn-paper-diagnose").textContent = done > 0 && done < PAPER_DIM_ORDER.length
+    ? "补全未完成诊断" : (done === PAPER_DIM_ORDER.length ? "重新诊断" : "开始诊断");
   $("paper-req-status").textContent = confirmed
     ? `需求已确认 · 当前版本 v${p.current_version || 0} · 已完成 ${done}/4 个维度`
     : (p.suggestion
@@ -737,9 +755,8 @@ async function pwLoadPaper(paperId, opts = {}) {
     ? opts.restoreStep
     : (confirmed ? 3 : 2);
   pwSetStep(step, true);
-  await pwLoadParagraphs();
-  await pwLoadGuideline();
-  await pwLoadSimilar();
+  await Promise.all([pwLoadParagraphs(), pwLoadGuideline(), pwLoadSimilar()]);
+  if (seq !== paperState.loadSeq) return;
   if (paperState.batchResults.length) pwRenderBatchResults();
 }
 
@@ -925,9 +942,13 @@ async function pwStartDiagnose() {
   $("btn-paper-cancel").disabled = false;
   $("btn-paper-cancel").textContent = "取消诊断";
   pwTaskProgress("paper-diag", 0, "正在准备论文与模型…");
-  $("paper-dim-cards").innerHTML = '<span class="muted">诊断中，通常需要 30~90 秒...</span>';
+  pwRenderDiagnosis({}, null);
   try {
-    const r = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/diagnose`, { dimensions: [] });
+    const existing = paperState.paper.analysis_results || {};
+    const missing = PAPER_DIM_ORDER.filter((key) => !existing[key] || existing[key].stale);
+    const r = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/diagnose`, {
+      dimensions: missing.length < PAPER_DIM_ORDER.length ? missing : [],
+    });
     paperState.diagTaskId = r.task_id;
     pwPollDiagnose(r.task_id);
   } catch (e) {
@@ -974,6 +995,9 @@ function pwPollDiagnose(taskId) {
         typeof t.progress === "number" ? t.progress : 0,
         logLines[logLines.length - 1] || "正在诊断…"
       );
+      if (t.status === "running" && t.report) {
+        pwRenderDiagnosis(t.report.dimensions || {}, null);
+      }
       if (t.status === "done") {
         $("btn-paper-diagnose").disabled = false;
         pwTaskProgress("paper-diag", 100, "诊断完成");
@@ -1036,8 +1060,14 @@ function pwRenderDiagnosis(dims, total) {
   wrap.innerHTML = "";
   PAPER_DIM_ORDER.forEach((key) => {
     const d = dims[key];
-    if (!d) return;
     const label = PAPER_DIM_LABELS[key] || key;
+    if (!d) {
+      const card = document.createElement("div");
+      card.className = "paper-dim-card";
+      card.innerHTML = `<div class="dim-head"><span>${esc(label)}</span><b>—</b></div><p class="muted">${paperState.diagPaperId ? "等待诊断结果…" : "尚未完成，可重新诊断"}</p>`;
+      wrap.appendChild(card);
+      return;
+    }
     const score = Number(d.score || 0);
     const stale = d.stale ? '<span class="paper-stale">已过期</span>' : "";
     const issues = Array.isArray(d.issues) ? d.issues : [];
@@ -1177,8 +1207,11 @@ async function pwAiRewriteIssue(pid, instruction, mode) {
 // ---------- 相似论文 ----------
 async function pwLoadSimilar() {
   if (!paperState.paperId) return;
+  const pid = paperState.paperId;
+  const seq = paperState.loadSeq;
   try {
-    const data = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}/similar`);
+    const data = await api(`/api/paper/${encodeURIComponent(pid)}/similar`);
+    if (pid !== paperState.paperId || seq !== paperState.loadSeq) return;
     if (data.cached) pwRenderSimilar(data);
   } catch (e) { /* 未检索过时忽略 */ }
 }
@@ -1276,7 +1309,7 @@ function pwRenderSimilar(report) {
   }
   const rows = items.map((it, i) => {
     const pct = Math.round((it.similarity || 0) * 100);
-    const link = it.url || (it.doi ? `https://doi.org/${it.doi}` : "");
+    const link = /^https?:\/\//i.test(it.url || "") ? it.url : (it.doi ? `https://doi.org/${it.doi}` : "");
     const title = link
       ? `<a href="${esc(link)}" target="_blank" rel="noopener">${esc(it.title)}</a>`
       : esc(it.title);
@@ -1304,10 +1337,13 @@ function pwRenderSimilar(report) {
 // ---------- 段落 ----------
 async function pwLoadParagraphs() {
   if (!paperState.paperId) return;
+  const pid = paperState.paperId;
+  const seq = ++paperState.paragraphSeq;
   const section = $("paper-section-filter").value;
   const qs = section ? `?section=${encodeURIComponent(section)}` : "";
   try {
     const data = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}/paragraphs${qs}`);
+    if (pid !== paperState.paperId || seq !== paperState.paragraphSeq) return;
     paperState.sections = data.sections || [];
     paperState.paragraphs = (data.paragraphs || []).filter(
       (p) => p.type === "body" && !p.table_id
@@ -1316,6 +1352,7 @@ async function pwLoadParagraphs() {
     pwFillSectionFilter();
     pwRenderParagraphs();
   } catch (e) {
+    if (pid !== paperState.paperId || seq !== paperState.paragraphSeq) return;
     pwAlert("加载段落失败：" + e.message, "err");
   }
 }
@@ -1502,6 +1539,12 @@ function pwSyncBatchAdoptButton() {
 
 function pwRenderBatchResults() {
   const box = $("paper-batch-results");
+  paperState.batchResults = (paperState.batchResults || []).filter((item) => {
+    const error = pwRewriteLanguageError(item);
+    if (!error) return true;
+    paperState.batchErrors.push({ paragraph_id: item.paragraph_id, error });
+    return false;
+  });
   const items = paperState.batchResults || [];
   const errors = paperState.batchErrors || [];
   if (!items.length && !errors.length) {
@@ -1558,10 +1601,14 @@ async function pwSelectParagraph(pid) {
 // ---------- 全局改写方针 ----------
 async function pwLoadGuideline() {
   if (!paperState.paperId) return;
+  const pid = paperState.paperId;
+  const seq = paperState.loadSeq;
   try {
     const r = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}/rewrite/guideline`);
+    if (pid !== paperState.paperId || seq !== paperState.loadSeq) return;
     pwRenderGuideline(r);
   } catch (e) {
+    if (pid !== paperState.paperId || seq !== paperState.loadSeq) return;
     pwRenderGuideline({ guideline: null });
   }
 }
@@ -1902,7 +1949,33 @@ function pwBuildRevised() {
     .join("");
 }
 
+function pwRewriteLanguageError(r) {
+  // Mirror the backend's language categories, including for results created
+  // before the running server was restarted after an upgrade.
+  const language = (text) => {
+    const cjk = (String(text || "").match(/[\u4e00-\u9fff]/g) || []).length;
+    const latin = (String(text || "").match(/[a-zA-Z]/g) || []).length;
+    if (!cjk && !latin) return "";
+    const ratio = cjk / (cjk + latin);
+    return ratio >= 0.3 ? "zh" : ratio <= 0.1 ? "en" : "mixed";
+  };
+  const original = language(r.original);
+  const revised = language(r.revised);
+  return original && original !== "mixed" && original !== revised
+    ? "改写结果改变了原文语言，已阻止采纳。请重新生成；若刚更新项目，请先重启服务。"
+    : "";
+}
+
 function pwRenderDiff(r) {
+  const error = pwRewriteLanguageError(r);
+  if (error) {
+    paperState.rewrite = null;
+    pwClearDiff();
+    $("btn-paper-adopt").classList.add("hidden");
+    $("paper-rewrite-warning").textContent = error;
+    $("paper-rewrite-warning").classList.remove("hidden");
+    return;
+  }
   paperState.diff = pwGroupDiff(r.diff || []);
   const { segs, groups } = paperState.diff;
   $("paper-diff").innerHTML = segs.map((s) => {
@@ -1952,6 +2025,8 @@ async function pwAdopt() {
     return;
   }
   const revised = pwBuildRevised();
+  const languageError = pwRewriteLanguageError({ original: r.original, revised });
+  if (languageError) { pwAlert(languageError, "err", 5); return; }
   if (!revised.trim()) { pwAlert("当前没有可保存的改写内容", "warn"); return; }
   if (revised.trim() === (r.original || "").trim()) {
     pwAlert("当前未保留任何改写，请至少保留一处改动后再保存。", "warn");
@@ -2009,6 +2084,8 @@ async function pwAdopt() {
 async function pwAdoptBatch() {
   const items = paperState.batchResults || [];
   if (!paperState.paperId || !items.length) return;
+  const languageError = items.map(pwRewriteLanguageError).find(Boolean);
+  if (languageError) { pwAlert(languageError, "err", 5); return; }
   if (paperState.batchTaskId) {
     pwAlert("批量改写仍在进行中，请等待完成或先取消任务。", "warn");
     return;
@@ -2295,6 +2372,7 @@ async function pwAskOpenBasis(id, kind) {
 }
 
 async function pwAsk() {
+  if ($("btn-paper-ask").disabled) return;
   if (!paperState.paperId) {
     pwAlert("请先上传论文，再围绕该论文提问。", "warn");
     pwSetStep(1);
@@ -2303,12 +2381,16 @@ async function pwAsk() {
   pwAskOpen(true);
   const q = $("paper-ask-input").value.trim();
   if (!q) return;
+  const pid = paperState.paperId;
+  const seq = ++paperState.askSeq;
+  const isCurrent = () => pid === paperState.paperId && seq === paperState.askSeq;
   const btn = $("btn-paper-ask");
   btn.disabled = true;
   $("paper-ask-answer").classList.remove("hidden");
   $("paper-ask-answer").innerHTML = '<span class="muted">思考中...</span>';
   try {
     const r = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/ask`, { question: q });
+    if (!isCurrent()) return;
     if (r.rejected) {
       $("paper-ask-answer").innerHTML = `<p class="muted">${esc(r.answer)}</p>`;
     } else {
@@ -2318,9 +2400,10 @@ async function pwAsk() {
       pwRefreshQuota();
     }
   } catch (e) {
+    if (!isCurrent()) return;
     $("paper-ask-answer").innerHTML = `<span class="paper-error">${esc(e.message)}</span>`;
   } finally {
-    btn.disabled = false;
+    if (isCurrent()) btn.disabled = false;
   }
 }
 

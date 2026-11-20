@@ -4,6 +4,7 @@
 结果缓存 7 天；网络失败返回空列表 + error，不抛 500。
 """
 import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
 
 from tools.academic_search import AcademicSearchTool
@@ -146,28 +147,39 @@ def find_similar(parsed: dict, requirement: dict | None = None, limit: int = 10,
     total_queries = max(1, len(terms) * 2)
     done = 0
 
-    for term in terms:
-        for source_name, search in (
-            ("Crossref", tool._search_crossref),
-            ("OpenAlex", tool._search_openalex),
-        ):
+    jobs = [(term, name, search) for term in terms for name, search in (
+        ("Crossref", tool._search_crossref), ("OpenAlex", tool._search_openalex),
+    )]
+    batches = {}
+    with ThreadPoolExecutor(max_workers=min(4, len(jobs))) as pool:
+        futures = {}
+        for index, (term, name, search) in enumerate(jobs):
             check()
-            report(5 + int(65 * done / total_queries),
-                   f"正在检索 {source_name}：{term[:30]}…")
+            futures[pool.submit(search, term, per_query)] = (index, name)
+        for future in as_completed(futures):
             try:
-                items = search(term, per_query) or []
+                check()
+            except SimilarCancelled:
+                for pending in futures:
+                    pending.cancel()
+                raise
+            index, source_name = futures[future]
+            try:
+                batches[index] = future.result() or []
             except Exception as e:
-                logger.warning(f"相似论文检索失败 {source_name} {term}: {e}")
+                logger.warning(f"相似论文检索失败 {source_name}: {e}")
                 errors.append(f"{source_name} 检索失败")
-                done += 1
-                continue
             done += 1
-            for it in items:
-                if not isinstance(it, dict) or not (it.get("title") or "").strip():
-                    continue
-                key = _dedup_key(it)
-                if key not in collected:
-                    collected[key] = dict(it)
+            report(5 + int(65 * done / total_queries),
+                   f"已完成 {done}/{total_queries} 路检索：{source_name}")
+    # Merge in query order so equal-score results are stable across runs.
+    for index in sorted(batches):
+        for it in batches[index]:
+            if not isinstance(it, dict) or not (it.get("title") or "").strip():
+                continue
+            key = _dedup_key(it)
+            if key not in collected:
+                collected[key] = dict(it)
 
     check()
     if not collected:

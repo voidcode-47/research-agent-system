@@ -284,6 +284,7 @@ select.input { cursor: pointer; }
 }
 .service-models li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .service-models code { overflow-wrap: anywhere; }
+.service-models .btn { margin-left: auto; flex: none; height: auto; padding: 3px 8px; }
 .service-models .muted { flex: none; font-size: 11px; }
 .provider-dialog {
   width: min(560px, calc(100% - 24px)); max-height: calc(100dvh - 24px); margin: auto;
@@ -379,6 +380,8 @@ select.input { cursor: pointer; }
   font-size: 11px; flex-shrink: 0;
 }
 .paper-step:hover { border-color: var(--border-hover); color: var(--text); }
+.paper-step:disabled { opacity: 0.5; cursor: not-allowed; }
+.paper-step:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .paper-step.active {
   border-color: var(--accent); background: var(--accent-bg); color: var(--accent-text);
   font-weight: 600;

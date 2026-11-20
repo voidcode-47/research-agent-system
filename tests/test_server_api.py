@@ -55,6 +55,25 @@ def _clean_tasks():
 
 
 # ---------- 基础 ----------
+def test_switch_custom_model_updates_saved_effective_and_factory_model(monkeypatch):
+    from llm.factory import LLMFactory
+    from unittest.mock import MagicMock
+    monkeypatch.setattr("llm.openai_llm.OpenAI", MagicMock())
+    created = client.post("/api/custom-providers", json={
+        "name": "Test gateway", "protocol": "openai",
+        "base_url": "https://example.test/v1", "models": ["model-a", "model-b"],
+        "default_model": "model-a",
+    })
+    assert created.status_code == 200
+    provider = "custom:" + created.json()["id"]
+    for model in ["model-a", "model-b", "model-a"]:
+        response = client.post("/api/settings", json={"provider": provider, "model": model})
+        assert response.status_code == 200
+        assert prefs.load_prefs()["model"] == model
+        assert client.get("/api/providers").json()["effective_model"] == model
+        assert LLMFactory.create().model == model
+
+
 def test_health():
     r = client.get("/api/health")
     assert r.status_code == 200

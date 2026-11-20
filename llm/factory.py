@@ -66,9 +66,12 @@ class LLMFactory:
             provider = settings.DEFAULT_LLM_PROVIDER
             try:
                 from utils.prefs import load_prefs
-                preferred = load_prefs().get("provider")
+                prefs = load_prefs()
+                preferred = prefs.get("provider")
                 if preferred:
                     provider = preferred
+                    if not model:
+                        model = prefs.get("model") or None
             except Exception:
                 pass
             if provider == "custom":

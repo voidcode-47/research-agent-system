@@ -1,5 +1,7 @@
 """四维诊断：层次 / 内容可实现性 / 正文格式 / 去 AI 味（含 AI 生成率）。"""
 import datetime
+import contextvars
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 
@@ -8,7 +10,6 @@ from config.prompts import (
     DEAI_DETECT_PROMPT,
     FEASIBILITY_PROMPT,
     LEVEL_DIAGNOSE_PROMPT,
-    PAPER_QA_PROMPT,
 )
 from llm.gateway import LLMGateway
 from paper import store
@@ -239,42 +240,6 @@ def _diagnose_format(gateway: LLMGateway, parsed: dict, requirement: dict,
         for it in result["issues"][:3]
     ]
     priorities = default_priorities
-    llm_error = ""
-    try:
-        issue_brief = [
-            {k: it.get(k) for k in ("rule_id", "severity", "page", "evidence", "suggestion")}
-            for it in result["issues"][:20]
-        ]
-        system = PAPER_QA_PROMPT
-        user = (
-            "以下是格式规则引擎输出的问题清单（JSON）。请按影响面与修改成本，"
-            "归纳出 top3 优先修改项。\n\n"
-            f"格式统计：{json.dumps(result.get('stats', {}), ensure_ascii=False)}\n"
-            f"问题清单：{json.dumps(issue_brief, ensure_ascii=False)}\n\n"
-            "输出 JSON：{\"priorities\": [{\"rule_id\": \"FMT-00x\", "
-            "\"reason\": \"为什么优先\", \"action\": \"具体动作\"}]}，最多 3 条。"
-        )
-        data = gateway.run(
-            "paper_qa",
-            [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            paper_id=paper_id,
-            max_tokens=1200,
-            validator=lambda d: isinstance(d, dict) and isinstance(d.get("priorities"), list),
-        )
-        items = []
-        for it in data.get("priorities") or []:
-            if not isinstance(it, dict):
-                continue
-            items.append({
-                "rule_id": str(it.get("rule_id") or ""),
-                "reason": str(it.get("reason") or ""),
-                "action": str(it.get("action") or ""),
-            })
-        if items:
-            priorities = items[:3]
-    except Exception as e:
-        logger.warning(f"格式优先项归纳失败，使用规则排序: {e}")
-        llm_error = str(e)
 
     return {
         "dimension": "format",
@@ -283,7 +248,7 @@ def _diagnose_format(gateway: LLMGateway, parsed: dict, requirement: dict,
         "issues": result["issues"],
         "stats": result["stats"],
         "priorities": priorities,
-        "llm_error": llm_error,
+        "llm_error": "",
         "stale": False,
         "generated_at": _now(),
         **_score_trace(parsed, requirement, "rules:format_rules"),
@@ -513,7 +478,9 @@ def diagnose(paper_id: str, llm, dimensions: list[str] | None = None,
     if not requirement.get("confirmed"):
         raise ValueError("需求尚未确认，请先完成需求确认")
 
-    dims = [d for d in (dimensions or list(DIAGNOSIS_DIMENSIONS)) if d in DIAGNOSIS_DIMENSIONS]
+    dims = list(dict.fromkeys(d for d in (dimensions or list(DIAGNOSIS_DIMENSIONS))
+                             if d in DIAGNOSIS_DIMENSIONS))
+    dims.sort(key=lambda dim: dim != "format")
     if not dims:
         raise ValueError("未指定有效的诊断维度")
 
@@ -522,33 +489,49 @@ def diagnose(paper_id: str, llm, dimensions: list[str] | None = None,
     errors: dict[str, str] = {}
     total = len(dims)
 
-    for idx, dim in enumerate(dims):
+    def run_dimension(dim):
         if should_cancel and should_cancel():
             raise DiagnosisCancelled("诊断已取消")
-        label = DIAGNOSIS_DIMENSIONS[dim]["label"]
-        if progress:
-            progress("diagnose", f"开始诊断：{label}（{idx + 1}/{total}）",
-                     round(idx * 100 / total))
-        try:
-            result = _HANDLERS[dim](gateway, parsed, requirement, paper_id)
-            result["source_version"] = source_version
-            if not store.save_analysis_if_current(
-                    paper_id, dim, result, source_version, requirement):
-                raise DiagnosisStale(
-                    "论文或需求在诊断过程中发生变化，旧诊断结果未保存；请重新诊断"
-                )
-            results[dim] = result
+        return _HANDLERS[dim](gateway, parsed, requirement, paper_id)
+
+    # Each worker needs its own copied context: quota reservations and admin
+    # identity are context-local, and must survive the thread boundary.
+    workers = 1 if getattr(llm, "is_local", False) else min(3, total)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {}
+        for dim in dims:
+            if should_cancel and should_cancel():
+                raise DiagnosisCancelled("诊断已取消")
             if progress:
-                progress("diagnose", f"完成：{label}（{result.get('score')} 分）",
-                         round((idx + 1) * 100 / total))
-        except DiagnosisStale:
-            raise
-        except Exception as e:
-            logger.exception(f"诊断维度失败 {dim}")
-            errors[dim] = str(e)
-            if progress:
-                progress("diagnose", f"失败：{label}（{e}）",
-                         round((idx + 1) * 100 / total))
+                progress("diagnose", f"准备诊断：{DIAGNOSIS_DIMENSIONS[dim]['label']}", 0)
+            futures[pool.submit(contextvars.copy_context().run, run_dimension, dim)] = dim
+        for idx, future in enumerate(as_completed(futures)):
+            dim = futures[future]
+            label = DIAGNOSIS_DIMENSIONS[dim]["label"]
+            try:
+                result = future.result()
+                result["source_version"] = source_version
+                if not store.save_analysis_if_current(
+                        paper_id, dim, result, source_version, requirement):
+                    raise DiagnosisStale(
+                        "论文或需求在诊断过程中发生变化，旧诊断结果未保存；请重新诊断"
+                    )
+                results[dim] = result
+                if progress:
+                    progress("diagnose", f"完成：{label}（{result.get('score')} 分）",
+                             round((idx + 1) * 100 / total))
+            except (DiagnosisStale, DiagnosisCancelled):
+                for pending in futures:
+                    pending.cancel()
+                raise
+            except Exception as e:
+                logger.exception(f"诊断维度失败 {dim}")
+                errors[dim] = str(e)
+                if progress:
+                    progress("diagnose", f"失败：{label}（{e}）",
+                             round((idx + 1) * 100 / total))
+        if should_cancel and should_cancel():
+            raise DiagnosisCancelled("诊断已取消")
 
     with store.locked():
         if not store.analysis_snapshot_matches(

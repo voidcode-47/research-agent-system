@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<link rel="stylesheet" href="/style.css?v=e530f8f8adc7">
+<link rel="stylesheet" href="/style.css?v=a0667b62c64c">
 </head>
 <body>
 <div class="layout">
@@ -148,6 +148,7 @@
       <div class="paper-step-panel" id="paper-step-3">
         <div class="card">
           <div class="section-title">③ 四维诊断</div>
+          <p class="muted">论文层次、内容可实现性、正文格式、AI 率共四项。格式在本地检查；云端模型维度并行处理，本地模型依次执行。</p>
           <div class="row">
             <button id="btn-paper-diagnose" class="btn btn-primary">开始诊断</button>
             <button id="btn-paper-cancel" class="btn btn-ghost hidden">取消诊断</button>
@@ -428,6 +429,7 @@
               </div>
               <button type="submit" id="btn-use-model" class="btn">设为当前模型</button>
             </form>
+            <p class="hint-line">添加模型不会自动切换。可在下方点击「使用此模型」，或选择上方服务与模型后点击「设为当前模型」。切换对新任务生效。</p>
             <p id="active-model-status" class="hint-line" role="status"></p>
           </div>
           <div id="provider-config-list" class="hidden">
@@ -576,7 +578,7 @@
   <article id="report-preview-body" class="markdown"></article>
 </dialog>
 
-<script src="/app.js?v=32179c9c6471"></script>
-<script src="/paper.js?v=f78a312969b5"></script>
+<script src="/app.js?v=b6cb8bdeb8cb"></script>
+<script src="/paper.js?v=5c2ea34dc48f"></script>
 </body>
 </html>
