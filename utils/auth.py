@@ -182,25 +182,34 @@ def _write_credentials(username: str, password: str) -> str:
 
 
 def ensure_admin() -> dict:
-    """确保管理员账号存在；环境变量密码优先于本地文件。"""
+    """确保管理员账号存在；环境变量只在首次创建账号时作为初始密码。"""
     username = (settings.ADMIN_USERNAME or "admin").strip() or "admin"
     env_password = (settings.ADMIN_PASSWORD or "").strip()
     record = _load_record()
-    if env_password:
-        if (
-            not record
-            or record.get("username") != username
-            or not verify_password(env_password, record)
-        ):
-            _save_record(username, env_password)
-        return {"username": username, "created": False, "credentials_path": ""}
     if record.get("username") and record.get("hash"):
-        return {"username": str(record["username"]), "created": False, "credentials_path": ""}
+        if record.get("username") != username:
+            record["username"] = username
+            record["updated_at"] = _now()
+            _write_private(ADMIN_PATH, json.dumps(record, ensure_ascii=False, indent=2))
+        return {"username": username, "created": False, "credentials_path": ""}
+    if env_password:
+        _save_record(username, env_password)
+        return {"username": username, "created": True, "credentials_path": ""}
     password = _generate_password()
     _save_record(username, password)
     path = _write_credentials(username, password)
     logger.warning(f"已生成管理员账号 {username}，初始密码见 {path or '启动日志'}")
     return {"username": username, "created": True, "credentials_path": path}
+
+
+def change_password(current_password: str, new_password: str) -> bool:
+    """验证当前凭据并原子替换已保存的密码哈希。"""
+    ensure_admin()
+    record = _load_record()
+    if not verify_password(current_password or "", record):
+        return False
+    _save_record(str(record.get("username") or settings.ADMIN_USERNAME or "admin"), new_password)
+    return True
 
 
 def _prune_sessions(now: float) -> None:
@@ -238,6 +247,19 @@ def destroy_session(token: str) -> None:
     with _lock:
         _load_sessions_locked(now)
         if _sessions.pop(_token_key(token), None) is not None:
+            _save_sessions_locked()
+
+
+def revoke_sessions_except(token: str) -> None:
+    """密码更改后使其他浏览器会话失效，保留当前登录会话。"""
+    keep = _token_key(token) if token else ""
+    now = time.time()
+    with _lock:
+        _load_sessions_locked(now)
+        retained = {key: value for key, value in _sessions.items() if key == keep}
+        if retained != _sessions:
+            _sessions.clear()
+            _sessions.update(retained)
             _save_sessions_locked()
 
 

@@ -33,19 +33,9 @@ class TestLLMBase:
 
 
 class TestLLMFactory:
-    def test_create_deepseek(self, monkeypatch):
-        monkeypatch.setattr(settings, "DEEPSEEK_API_KEY", "test-key")
-        llm = LLMFactory.create("deepseek")
-        assert llm.provider == "deepseek"
-        assert llm.model == "deepseek-chat"
-        assert llm.api_key == "test-key"
-
-    def test_create_zhipu(self, monkeypatch):
-        monkeypatch.setattr(settings, "ZHIPU_API_KEY", "test-key")
-        monkeypatch.setattr(settings, "DEFAULT_LLM_PROVIDER", "zhipu")
-        llm = LLMFactory.create()
-        assert llm.provider == "zhipu"
-        assert llm.api_key == "test-key"
+    def test_removed_cloud_provider_cannot_be_created(self):
+        with pytest.raises(ValueError, match="已移除"):
+            LLMFactory.create("deepseek")
 
     def test_create_ollama(self, monkeypatch):
         monkeypatch.setattr(settings, "OLLAMA_BASE_URL", "http://localhost:11434")
@@ -72,8 +62,8 @@ class TestLLMFactory:
             LLMFactory.create("unknown_provider")
 
     def test_get_models(self):
-        models = LLMFactory.get_models("zhipu")
-        assert "glm-4-flash" in models
+        models = LLMFactory.get_models("ollama")
+        assert "qwen2.5:7b" in models
 
 
 class TestHealthCheck:
@@ -153,8 +143,8 @@ class TestHealthCheck:
 
 class TestProviderConfig:
     def test_get_provider_config(self):
-        config = get_provider_config("zhipu")
-        assert config["label"] == "智谱 GLM"
+        config = get_provider_config("ollama")
+        assert config["label"] == "Ollama (本地)"
         assert config["supports_tools"] is True
 
     def test_get_unknown_raises(self):

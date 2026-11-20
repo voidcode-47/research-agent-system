@@ -1,47 +1,6 @@
-"""各 LLM 提供商配置表，集中维护模型名/上下文窗口/能力。"""
+"""本地模型提供商与自定义服务的运行时配置。"""
 
 PROVIDER_CONFIG: dict[str, dict] = {
-    "zhipu": {
-        "label": "智谱 GLM",
-        "default_model": "glm-4-flash",
-        "models": ["glm-4-flash", "glm-4", "glm-4-air"],
-        "context_window": 128000,
-        "supports_tools": True,
-        "base_url": "https://open.bigmodel.cn/api/paas/v4",
-        "env_key": "ZHIPU_API_KEY",
-        "env_base_url": "ZHIPU_BASE_URL",
-    },
-    "qwen": {
-        "label": "通义千问",
-        "default_model": "qwen-plus",
-        "models": ["qwen-plus", "qwen-turbo", "qwen-max"],
-        "context_window": 131072,
-        "supports_tools": True,
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "env_key": "DASHSCOPE_API_KEY",
-        "env_base_url": "DASHSCOPE_BASE_URL",
-    },
-    "deepseek": {
-        "label": "DeepSeek",
-        "default_model": "deepseek-chat",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
-        "context_window": 64000,
-        "supports_tools": True,
-        "base_url": "https://api.deepseek.com/v1",
-        "env_key": "DEEPSEEK_API_KEY",
-        "env_base_url": "DEEPSEEK_BASE_URL",
-    },
-    "custom": {
-        "label": "自定义 API (OpenAI 兼容)",
-        # URL/Key/模型名均由用户运行时填写（侧边栏/设置页），不预设
-        "default_model": "",
-        "models": [],
-        "context_window": 128000,
-        "supports_tools": True,
-        "base_url": "",
-        "env_key": None,
-        "custom": True,
-    },
     "ollama": {
         "label": "Ollama (本地)",
         "default_model": "qwen2.5:7b",
@@ -54,7 +13,6 @@ PROVIDER_CONFIG: dict[str, dict] = {
     },
     "lmstudio": {
         "label": "LM Studio (本地)",
-        # 模型由 LM Studio 动态加载，留空表示运行时通过 /v1/models 自动发现
         "default_model": "",
         "models": [],
         "context_window": 32768,
@@ -68,13 +26,18 @@ PROVIDER_CONFIG: dict[str, dict] = {
 
 
 def get_provider_config(provider: str) -> dict:
-    """获取指定提供商的配置。"""
-    provider = provider.lower()
+    """获取本地或某个已配置自定义服务的运行时信息。"""
+    provider = (provider or "").lower()
+    if provider.startswith("custom:"):
+        from utils.custom_providers import get_service_config
+        return get_service_config(provider)
     if provider not in PROVIDER_CONFIG:
-        raise ValueError(f"未知提供商: {provider}，可选: {list(PROVIDER_CONFIG.keys())}")
+        raise ValueError(f"未知或已移除的提供商: {provider}，可选: {list(PROVIDER_CONFIG)}")
     return PROVIDER_CONFIG[provider]
 
 
 def list_providers() -> list[str]:
-    """返回所有支持的提供商名称。"""
-    return list(PROVIDER_CONFIG.keys())
+    """返回当前可选的本地和自定义服务标识。"""
+    from utils.custom_providers import list_services
+    local = list(PROVIDER_CONFIG)
+    return local + [f"custom:{service['id']}" for service in list_services()]

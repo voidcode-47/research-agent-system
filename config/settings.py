@@ -14,22 +14,20 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # LLM 默认提供商（云端默认 DeepSeek；本地可选 ollama/lmstudio）
-    DEFAULT_LLM_PROVIDER: str = "deepseek"
+    # 未配置自定义服务时以本地 Ollama 为默认值。
+    DEFAULT_LLM_PROVIDER: str = "ollama"
 
-    # 智谱 GLM
+    # 旧版直连配置仅用于迁移，不再作为独立提供商展示。
     ZHIPU_API_KEY: str = ""
     ZHIPU_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
 
-    # 通义千问 (DashScope)
     DASHSCOPE_API_KEY: str = ""
     DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
-    # DeepSeek
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
 
-    # 自定义 OpenAI 兼容 API（由用户在设置页填写，可连接任意兼容网关）
+    # 旧版单自定义 API 配置；首次启动迁移到 data/custom_providers.json。
     CUSTOM_API_BASE_URL: str = ""
     CUSTOM_API_KEY: str = ""
     CUSTOM_API_MODEL: str = ""

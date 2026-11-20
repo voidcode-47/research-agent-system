@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<link rel="stylesheet" href="/style.css?v=dafe40e08049">
+<link rel="stylesheet" href="/style.css?v=ad9436501396">
 </head>
 <body>
 <div class="layout">
@@ -409,20 +409,63 @@
           </div>
         </div>
         <div class="card card-span">
-          <div class="section-title">模型提供商</div>
-          <p class="muted">各提供商的 API Key 与接口地址。云提供商 Key 保存到本地 .env，不会上传；本地服务填服务地址即可。</p>
+          <div class="section-title">模型服务与协议</div>
           <div id="settings-readonly" class="hint-line hidden">
-            普通用户不能修改模型配置，以下为管理员设定的当前模型。如需更换模型，请登录管理员账号。
+            模型由管理员配置。登录管理员账号后可修改。
           </div>
-          <div id="provider-config-list" class="prov-grid"></div>
+          <div class="prov-section">
+            <h2 class="prov-name">当前使用的模型</h2>
+            <p id="set-current-model" class="readonly-model">加载中…</p>
+            <form id="active-model-form" class="prov-picker hidden">
+              <div>
+                <label class="lbl" for="active-provider">服务</label>
+                <select id="active-provider" class="input" required></select>
+              </div>
+              <div>
+                <label id="active-model-label" class="lbl" for="active-model">模型</label>
+                <select id="active-model" class="input"></select>
+                <input id="active-local-model" class="input hidden" placeholder="留空使用服务默认模型" spellcheck="false">
+              </div>
+              <button type="submit" id="btn-use-model" class="btn">设为当前模型</button>
+            </form>
+            <p id="active-model-status" class="hint-line" role="status"></p>
+          </div>
+          <div id="provider-config-list" class="hidden">
+            <div class="prov-section">
+              <div class="prov-head">
+                <h2 class="prov-name">自定义服务</h2>
+                <button type="button" id="btn-add-custom-provider" class="btn btn-primary">新增自定义服务</button>
+              </div>
+              <div id="custom-provider-list"></div>
+              <p id="custom-provider-status" class="hint-line" role="status"></p>
+            </div>
+            <div class="prov-section">
+              <h2 class="prov-name">本地服务</h2>
+              <div id="local-provider-list" class="prov-grid"></div>
+            </div>
+          </div>
+        </div>
+        <div id="admin-password-card" class="card hidden">
+          <div class="section-title">管理员密码</div>
+          <p class="muted">密码至少 12 个字符。更改后当前登录保持有效，其他会话将退出。</p>
+          <form id="change-password-form">
+            <label class="lbl" for="password-current">当前密码</label>
+            <input id="password-current" class="input" type="password" autocomplete="current-password" required>
+            <label class="lbl" for="password-new">新密码</label>
+            <input id="password-new" class="input" type="password" autocomplete="new-password" minlength="12" required>
+            <label class="lbl" for="password-confirm">确认新密码</label>
+            <input id="password-confirm" class="input" type="password" autocomplete="new-password" minlength="12" required>
+            <div class="topic-actions">
+              <button id="btn-change-password" class="btn btn-primary" type="submit">更改密码</button>
+              <span id="password-status" class="hint-line"></span>
+            </div>
+          </form>
         </div>
         <div class="card">
           <div class="section-title">运行环境</div>
           <p class="muted">当前生效配置的摘要，用于排查问题。</p>
           <table class="kv">
-            <tr><td>当前模型</td><td id="set-current-model">-</td></tr>
             <tr><td>服务状态</td><td id="set-srv">-</td></tr>
-            <tr><td>自定义 API</td><td id="set-custom">-</td></tr>
           </table>
         </div>
         <div class="card">
@@ -437,8 +480,6 @@
       <div class="card">
         <div class="section-title">使用提示</div>
         <ul class="tips">
-          <li>全站使用同一个模型：在「模型提供商」中填写 Key / 地址后即生效</li>
-          <li>自定义 API 需填写 Base URL、API Key 与默认模型名</li>
           <li>模型不可用时，左侧「测试连接」会给出具体原因</li>
           <li>历史报告可在「参考文献调研」页直接删除</li>
         </ul>
@@ -468,7 +509,62 @@
   </div>
 </div>
 
-<script src="/app.js?v=5d1b8e4e9389"></script>
-<script src="/paper.js?v=a70038cb4845"></script>
+<dialog id="custom-provider-dialog" class="provider-dialog" aria-labelledby="custom-provider-title">
+  <form id="custom-provider-form">
+    <h2 id="custom-provider-title" class="modal-title">新增自定义服务</h2>
+    <fieldset id="custom-provider-fields">
+      <div id="custom-provider-preset-field">
+        <label class="lbl" for="custom-provider-preset">厂商预设</label>
+        <select class="input" id="custom-provider-preset"></select>
+      </div>
+      <div class="prov-grid provider-fields">
+        <div>
+          <label class="lbl" for="custom-provider-name">服务名称</label>
+          <input class="input" id="custom-provider-name" maxlength="80" required>
+        </div>
+        <div>
+          <label class="lbl" for="custom-provider-protocol">接口协议</label>
+          <select class="input" id="custom-provider-protocol">
+            <option value="openai">OpenAI 兼容</option>
+            <option value="anthropic">Anthropic Messages</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </div>
+      </div>
+      <label class="lbl" for="custom-provider-url">Base URL</label>
+      <input class="input" id="custom-provider-url" type="url" placeholder="https://api.example.com/v1" spellcheck="false" required>
+      <label class="lbl" for="custom-provider-key">API Key <span id="custom-provider-key-status"></span></label>
+      <input class="input" id="custom-provider-key" type="password" autocomplete="new-password" spellcheck="false">
+      <div class="prov-head provider-model-heading">
+        <h3 class="prov-name">模型列表</h3>
+        <button type="button" id="btn-add-service-model" class="btn">＋ 添加模型</button>
+      </div>
+      <div id="custom-provider-models"></div>
+      <p id="custom-provider-error" class="hint-line txt-err" role="status"></p>
+      <div class="modal-actions">
+        <button type="button" id="btn-cancel-custom-provider" class="btn btn-ghost">取消</button>
+        <button type="submit" class="btn btn-primary">保存服务</button>
+      </div>
+    </fieldset>
+  </form>
+</dialog>
+
+<dialog id="report-preview-dialog" class="report-preview-dialog" aria-labelledby="report-preview-title">
+  <div class="report-preview-head">
+    <div>
+      <h2 id="report-preview-title" class="modal-title">报告预览</h2>
+      <p id="report-preview-status" class="hint-line" role="status" aria-live="polite"></p>
+    </div>
+    <div class="provider-actions">
+      <button type="button" id="btn-report-preview-md" class="btn btn-ghost" disabled>下载 Markdown</button>
+      <button type="button" id="btn-report-preview-docx" class="btn btn-ghost" disabled>下载 Word</button>
+      <button type="button" id="btn-close-report-preview" class="btn btn-ghost" aria-label="关闭预览">关闭</button>
+    </div>
+  </div>
+  <article id="report-preview-body" class="markdown"></article>
+</dialog>
+
+<script src="/app.js?v=32179c9c6471"></script>
+<script src="/paper.js?v=e0eab238ccbd"></script>
 </body>
 </html>

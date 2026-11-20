@@ -14,6 +14,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -21,9 +22,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config.settings import settings
-from config.llm_config import PROVIDER_CONFIG, list_providers
+from config.llm_config import PROVIDER_CONFIG, get_provider_config, list_providers
 from llm.factory import LLMFactory
 from utils import auth, frontend_assets, runtime_lock
+from utils import custom_providers
 from utils.logger import get_logger
 from utils.prefs import load_prefs, save_prefs
 from utils.env_file import update_env
@@ -178,6 +180,20 @@ class LoginRequest(BaseModel):
     password: str = ""
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
+class CustomProviderRequest(BaseModel):
+    name: str = ""
+    protocol: str = "openai"
+    base_url: str = ""
+    api_key: str = ""
+    models: list[str] | str = []
+    default_model: str = ""
+
+
 # ---------------------------------------------------------------------------
 # SSE 工具
 # ---------------------------------------------------------------------------
@@ -224,18 +240,86 @@ def api_auth_logout(request: Request, response: Response):
     return _auth_payload("")
 
 
+@app.post("/api/auth/password", dependencies=[Depends(require_admin)])
+def api_auth_change_password(req: ChangePasswordRequest, request: Request):
+    if len(req.new_password) < 12:
+        raise HTTPException(400, "新密码至少需要 12 个字符")
+    if not auth.change_password(req.current_password, req.new_password):
+        raise HTTPException(400, "当前密码不正确")
+    # 清除 .env 中可能存在的明文初始密码；账号文件中保存的是带盐哈希。
+    update_env({"ADMIN_PASSWORD": ""}, os.path.join(BASE_DIR, ".env"))
+    settings.ADMIN_PASSWORD = ""
+    auth.revoke_sessions_except(request.cookies.get(auth.COOKIE_NAME, ""))
+    return {"ok": True}
+
+
+@app.post("/api/custom-providers", dependencies=[Depends(require_admin)])
+def api_create_custom_provider(req: CustomProviderRequest):
+    try:
+        return custom_providers.create_service(req.model_dump())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.put("/api/custom-providers/{service_id}", dependencies=[Depends(require_admin)])
+def api_update_custom_provider(service_id: str, req: CustomProviderRequest):
+    try:
+        updated = custom_providers.update_service(service_id, req.model_dump(exclude_unset=True))
+    except KeyError:
+        raise HTTPException(404, "自定义服务不存在")
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    prefs = load_prefs()
+    provider = f"custom:{service_id}"
+    if prefs.get("provider") == provider and prefs.get("model") not in updated["models"]:
+        save_prefs(provider, updated["default_model"], prefs.get("custom_models", {}))
+    return updated
+
+
+@app.delete("/api/custom-providers/{service_id}", dependencies=[Depends(require_admin)])
+def api_delete_custom_provider(service_id: str):
+    prefs = load_prefs()
+    if not custom_providers.delete_service(service_id):
+        raise HTTPException(404, "自定义服务不存在")
+    if prefs.get("provider") == f"custom:{service_id}":
+        remaining = custom_providers.list_services()
+        if remaining:
+            provider = f"custom:{remaining[0]['id']}"
+            model = remaining[0]["default_model"]
+        else:
+            provider = "ollama"
+            model = settings.OLLAMA_MODEL
+        save_prefs(provider, model, prefs.get("custom_models", {}))
+    return {"ok": True}
+
+
 @app.get("/api/providers")
 def api_providers(request: Request):
+    custom_providers.migrate_legacy_custom_api()
     prefs = load_prefs()
-    provider = prefs.get("provider") or settings.DEFAULT_LLM_PROVIDER
-    model = prefs.get("model") or ""
-    if provider == "custom":
-        model = settings.CUSTOM_API_MODEL or model
+    available = list_providers()
+    saved_provider = prefs.get("provider") or ""
+    preferred = saved_provider or settings.DEFAULT_LLM_PROVIDER
+    if preferred == "custom":
+        preferred = "custom:legacy"
+    provider = preferred if preferred in available else (
+        settings.DEFAULT_LLM_PROVIDER if settings.DEFAULT_LLM_PROVIDER in available
+        else (available[0] if available else "")
+    )
+    model = prefs.get("model") if provider == saved_provider else ""
+    if provider.startswith("custom:"):
+        config = get_provider_config(provider)
+        if model not in config["models"]:
+            model = config["default_model"]
+    elif not model and provider:
+        model = getattr(settings, f"{provider.upper()}_MODEL")
     labels = {k: v["label"] for k, v in PROVIDER_CONFIG.items()}
+    custom_services = custom_providers.list_services()
+    labels.update({f"custom:{item['id']}": item["name"] for item in custom_services})
     if not _is_admin_request(request):
         # 普通用户只读：只返回当前生效模型，不暴露 Key、Base URL 等配置
         return {
-            "providers": list_providers(),
+            "providers": [provider] if provider else [],
             "labels": labels,
             "current_provider": provider,
             "current_model": model,
@@ -244,6 +328,7 @@ def api_providers(request: Request):
             "custom_models": {},
             "cloud": {},
             "custom_api": {"base_url": "", "api_key": False, "model": ""},
+            "custom_services": [],
             "local_api": {},
             "research_prefs": prefs.get("research", {}),
             "read_only": True,
@@ -256,7 +341,7 @@ def api_providers(request: Request):
             "base_url": getattr(settings, base_env, "") or default_base,
         }
     return {
-        "providers": list_providers(),
+        "providers": available,
         "labels": labels,
         "current_provider": prefs.get("provider"),
         "current_model": prefs.get("model"),
@@ -269,6 +354,7 @@ def api_providers(request: Request):
             "api_key": bool(settings.CUSTOM_API_KEY),
             "model": settings.CUSTOM_API_MODEL,
         },
+        "custom_services": custom_services,
         "local_api": {
             "ollama": settings.OLLAMA_BASE_URL,
             "lmstudio": settings.LMSTUDIO_BASE_URL,
@@ -296,12 +382,18 @@ def api_health_check(req: HealthCheckRequest):
 
 @app.post("/api/settings", dependencies=[Depends(require_admin)])
 def api_save_settings(req: SettingsRequest):
+    custom_providers.migrate_legacy_custom_api()
     prefs = load_prefs()
+    available = list_providers()
     provider = req.provider or prefs.get("provider") or settings.DEFAULT_LLM_PROVIDER
+    if provider == "custom":
+        provider = "custom:legacy"
+    if req.provider is None and provider not in available:
+        provider = settings.DEFAULT_LLM_PROVIDER if settings.DEFAULT_LLM_PROVIDER in available else (available[0] if available else "")
     # 提前校验提供商：否则非法值会被写进 ui_prefs.json，
     # 直到下次对话/研究时才在 LLMFactory 里抛错，报错点离操作太远
-    if provider not in PROVIDER_CONFIG:
-        raise HTTPException(400, f"未知提供商: {provider}，可选: {list(PROVIDER_CONFIG.keys())}")
+    if provider not in available:
+        raise HTTPException(400, f"未知提供商: {provider}，可选: {available}")
     # custom_models[provider] 记录该提供商下用户手填的模型名（静态列表里没有的）
     custom_models = dict(prefs.get("custom_models", {}))
     if req.custom_model is not None:
@@ -313,11 +405,16 @@ def api_save_settings(req: SettingsRequest):
 
     # 切换提供商时清空旧模型名，避免把 A 家的模型名带进 B 家
     same_provider = provider == (prefs.get("provider") or "")
-    model = req.model if req.model is not None else (prefs.get("model", "") if same_provider else "")
+    config = get_provider_config(provider)
+    model = req.model if req.model is not None else (
+        prefs.get("model", "") if same_provider else config.get("default_model", "")
+    )
+    if config.get("custom") and model and model not in config.get("models", []):
+        raise HTTPException(400, "所选模型不属于该自定义服务")
 
     # 自定义 API 的 Base URL / Key / 模型名只在选定 custom 提供商时写入 .env。
     # 否则在别的提供商页面点保存，会把已配置好的自定义网关整段覆盖掉。
-    if provider == "custom" and (
+    if provider == "custom:legacy" and (
         req.custom_base_url is not None
         or req.custom_api_key is not None
         or req.custom_model is not None
@@ -339,7 +436,7 @@ def api_save_settings(req: SettingsRequest):
         if updates:
             update_env(updates)
 
-    # 云提供商（deepseek/zhipu/qwen）：Key / Base URL 由前端填写后写入 .env 并热更新
+    # 旧版云提供商配置已从设置中移除；新服务均通过本地自定义服务配置管理。
     if provider in CLOUD_ENV_MAP:
         key_env, base_env, _default = CLOUD_ENV_MAP[provider]
         updates = {}
@@ -584,9 +681,17 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
                     "## 三、主要方法与技术路线\n"
                     "## 四、数据、实验与评价\n"
                     "## 五、争议、局限与研究空白\n"
-                    "## 六、可执行的研究建议\n\n"
+                    "## 六、研究问题与假设\n"
+                    "## 七、研究设计与技术路线\n"
+                    "## 八、数据获取计划\n"
+                    "## 九、可执行的研究建议\n\n"
                     "要求：引用文献时标注编号 [n]；只能使用给定文献；"
                     "摘要没有具体数据时不要臆测；如果文献覆盖不足，请指出并建议补充检索。"
+                    "研究问题与假设必须对应主题和文献空白；研究设计要写明研究对象、"
+                    "方法步骤、对照或基线、评价指标与最小可行范围。数据获取计划必须写明"
+                    "数据来源与获取步骤、关键变量与字段、样本/时间范围、清洗与质量检查、"
+                    "合规与伦理注意事项，以及主数据源不可用时的备选数据方案；不得虚构"
+                    "具体数据集已经存在或已经获批。"
                     f"{length_hint}。"
                 ),
             },
@@ -786,11 +891,11 @@ def api_get_report(name: str, format: str = "md"):
             with open(fpath, encoding="utf-8") as f:
                 content = f.read()
             buf = md_to_docx(content)
-            from fastapi.responses import Response
+            download_name = quote(name.removesuffix(".md") + ".docx", safe="")
             return Response(
-                content=buf,
+                content=buf.getvalue(),
                 media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                headers={"Content-Disposition": f'attachment; filename="{name.replace(".md", ".docx")}"'},
+                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{download_name}"},
             )
         except Exception as e:
             raise HTTPException(500, f"Word 导出失败: {e}")
