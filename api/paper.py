@@ -42,6 +42,7 @@ from llm.factory import LLMFactory
 from llm.gateway import LLMGateway
 from paper import backup, store
 from paper.analysis import DiagnosisCancelled, DiagnosisStale, diagnose, total_score
+from paper.chunks import build_qa_context
 from paper.export import export_docx, export_pdf, export_summary_docx
 from paper.parser import (
     ParseCancelled,
@@ -51,6 +52,7 @@ from paper.parser import (
     validate_upload,
 )
 from paper.rewrite import (
+    MAX_PARAGRAPH_CHARS,
     apply_rewrite,
     apply_rewrites,
     generate_guideline,
@@ -764,6 +766,7 @@ def api_options(request: Request):
         "rewrite_modes": [
             {"value": k, "label": v} for k, v in REWRITE_MODES.items()
         ],
+        "rewrite_max_chars": MAX_PARAGRAPH_CHARS,
         "quota": quota.usage_snapshot(unlimited=unlimited),
         "tasks": {
             "workers": TASK_WORKERS,
@@ -1010,6 +1013,18 @@ def api_paragraphs(paper_id: str, section: str = ""):
         "total": len(paragraphs),
         "sections": sections,
         "paragraphs": selected,
+        "tables": parsed.get("tables") or [],
+    }
+
+
+@router.get("/{paper_id}/tables")
+def api_tables(paper_id: str):
+    """结构化表格列表；旧论文无表格数据时返回空列表。"""
+    _paper_or_404(paper_id)
+    parsed = store.load_parsed(paper_id)
+    return {
+        "paper_id": paper_id,
+        "tables": parsed.get("tables") or [],
     }
 
 
@@ -1352,8 +1367,10 @@ def _rewrite_target(paper_id: str, paragraph_id: str) -> tuple[int, dict]:
     target = next((p for p in paragraphs if p.get("id") == paragraph_id), None)
     if target is None:
         raise HTTPException(404, "段落不存在")
-    if len((target.get("text") or "").strip()) > 800:
-        raise HTTPException(400, "单次改写最多 800 字，请先拆分该段落")
+    if target.get("type") not in (None, "body") or target.get("table_id"):
+        raise HTTPException(400, "仅正文段落支持改写")
+    if len((target.get("text") or "").strip()) > MAX_PARAGRAPH_CHARS:
+        raise HTTPException(400, f"单次改写最多 {MAX_PARAGRAPH_CHARS} 字，请先拆分该段落")
     return version, target
 
 
@@ -1477,6 +1494,9 @@ def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
             target = paragraphs.get(pid)
             if target is None:
                 errors.append({"paragraph_id": pid, "error": "段落不存在"})
+                continue
+            if target.get("type") not in (None, "body") or target.get("table_id"):
+                errors.append({"paragraph_id": pid, "error": "仅正文段落支持改写"})
                 continue
             try:
                 result = rewrite_paragraph(
@@ -1645,11 +1665,12 @@ def api_export(paper_id: str, format: str = "docx"):
         raise HTTPException(400, "仅支持导出 Word（docx）、PDF（pdf）或修改说明（summary）")
     paragraphs = store.current_paragraphs(paper_id)
     requirement = store.load_requirement(paper_id) or {}
+    parsed = store.load_parsed(paper_id)
+    tables = parsed.get("tables") or []
     stem = _paper_stem(meta)
 
     if fmt == "summary":
         try:
-            parsed = store.load_parsed(paper_id)
             analyses = {}
             for dim in DIAGNOSIS_DIMENSIONS:
                 data = store.load_analysis(paper_id, dim)
@@ -1668,7 +1689,7 @@ def api_export(paper_id: str, format: str = "docx"):
 
     if fmt == "pdf":
         try:
-            buf = export_pdf(paper_id, paragraphs, requirement)
+            buf = export_pdf(paper_id, paragraphs, requirement, tables)
         except Exception as e:
             logger.exception("PDF 导出失败")
             raise HTTPException(500, f"PDF 导出失败：{e}")
@@ -1678,7 +1699,7 @@ def api_export(paper_id: str, format: str = "docx"):
             headers={"Content-Disposition": _attachment_header(f"{stem}_优化版.pdf")},
         )
     try:
-        buf = export_docx(paper_id, paragraphs, requirement)
+        buf = export_docx(paper_id, paragraphs, requirement, tables)
     except Exception as e:
         logger.exception("Word 导出失败")
         raise HTTPException(500, f"Word 导出失败：{e}")
@@ -1714,45 +1735,17 @@ def api_delete(paper_id: str):
     return {"ok": True, "deleted": paper_id}
 
 
-def _qa_context(parsed: dict, question: str, max_chars: int = 3600) -> str:
-    """按问题关键词挑选最相关的段落，拼接问答上下文。"""
-    from paper.similar import _tokens  # 复用同一套中英文分词
-
-    q_tokens = _tokens(question)
-    paragraphs = [p for p in parsed.get("paragraphs") or [] if p.get("type") == "body"]
-    ranked = sorted(
-        paragraphs,
-        key=lambda p: len(q_tokens & _tokens(p.get("text") or "")),
-        reverse=True,
-    )
-    lines = [f"标题：{parsed.get('title') or '（未识别）'}"]
-    abstract = (parsed.get("abstract") or "").strip()
-    if abstract:
-        lines.append("摘要：" + abstract[:600])
-    sections = parsed.get("sections") or []
-    if sections:
-        lines.append("章节：" + " / ".join(str(s.get("title") or "") for s in sections[:20]))
-    lines.append("相关段落：")
-    used = 0
-    for p in ranked[:12]:
-        chunk = f"[{p.get('id')} 第{p.get('page')}页] {p.get('text') or ''}"
-        if used + len(chunk) > max_chars:
-            break
-        lines.append(chunk)
-        used += len(chunk)
-    return "\n".join(lines)
-
-
 @router.post("/{paper_id}/ask")
 def api_ask(paper_id: str, body: AskBody):
     _paper_or_404(paper_id)
     question = (body.question or "").strip()
     g = gate(question, True)  # 绑定论文：只拦越狱/跑题，不要求额外论文信号
     if not g["allowed"]:
-        return {"answer": g["reply"], "basis": [], "rejected": True}
+        return {"answer": g["reply"], "basis": [], "evidence": [], "rejected": True}
 
     parsed = store.current_parsed(paper_id)
-    context = _qa_context(parsed, question)
+    budget = int(getattr(settings, "PAPER_QA_CONTEXT_CHARS", 3600) or 3600)
+    context, evidence = build_qa_context(parsed, question, budget)
     system = PAPER_QA_PROMPT
     user = (
         f"<paper_text>\n{context}\n</paper_text>\n\n"
@@ -1773,6 +1766,7 @@ def api_ask(paper_id: str, body: AskBody):
         raise HTTPException(500, f"论文问答失败：{e}")
     return {
         "answer": str(data.get("answer") or ""),
-        "basis": [str(x) for x in (data.get("basis") or [])][:8],
+        "basis": [item["id"] for item in evidence],
+        "evidence": evidence,
         "rejected": False,
     }

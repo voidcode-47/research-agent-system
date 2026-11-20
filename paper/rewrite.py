@@ -8,9 +8,15 @@ from llm.gateway import LLMGateway
 from paper import store
 from rules.deai_detector import detect
 
-MAX_PARAGRAPH_CHARS = 800
+MAX_PARAGRAPH_CHARS = 2000
 MAX_GROWTH_RATIO = 1.4
 MAX_GUIDE_CHARS = 14000
+
+_MODE_FOCUS = {
+    "deai": "消除模板化表达、套话和机械并列，让行文更自然，同时保持学术规范",
+    "polish": "提升学术表达、逻辑衔接和术语一致性，不刻意压缩篇幅",
+    "tighten": "压缩冗余与重复表述，合并松散句子，目标长度约为原文的 70%~85%",
+}
 
 
 def _now() -> str:
@@ -56,7 +62,9 @@ def _guide_context(paragraphs: list[dict], max_chars: int = MAX_GUIDE_CHARS) -> 
     """均匀抽样正文，兼顾覆盖全文与长度可控。"""
     items = [
         p for p in paragraphs or []
-        if (p.get("text") or "").strip() and p.get("type") not in ("caption",)
+        if (p.get("text") or "").strip()
+        and p.get("type") in ("body", "heading")
+        and not p.get("table_id")
     ]
     if not items:
         return ""
@@ -243,6 +251,7 @@ def rewrite_paragraph(llm, text: str, requirement: dict | None, mode: str = "dea
         keep=keep,
         banned=banned,
         mode_label=REWRITE_MODES[mode_key],
+        mode_focus=_MODE_FOCUS[mode_key],
         instruction=(instruction or "无").strip()[:300],
         guideline=(guideline or "无"),
     )

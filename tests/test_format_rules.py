@@ -77,6 +77,26 @@ def test_section_number_gap():
     assert "从 1 跳到 3" in fmt3[0]["evidence"]
 
 
+def test_heading_jump_issue_points_to_first_body_paragraph():
+    parsed = _parsed(
+        body=[
+            _para("p_0001", "heading", "1 引言", level=1),
+            _para("p_0002", "body", "引言正文。"),
+            _para("p_0004", "heading", "1.1.1 细节", level=3),
+            _para("p_0005", "body", "细节正文。"),
+        ],
+        sections=[
+            {"id": "s1", "level": 1, "title": "1 引言",
+             "paragraph_ids": ["p_0001", "p_0002"]},
+            {"id": "s2", "level": 3, "title": "1.1.1 细节",
+             "paragraph_ids": ["p_0004", "p_0005"]},
+        ],
+    )
+    fmt2 = [i for i in check_format(parsed)["issues"] if i["rule_id"] == "FMT-002"]
+    assert len(fmt2) == 1
+    assert fmt2[0]["paragraph_id"] == "p_0005"
+
+
 def test_figure_caption_missing():
     parsed = _parsed(body=[_para(text="实验结果如图 2 所示。")])
     fmt4 = [i for i in check_format(parsed)["issues"] if i["rule_id"] == "FMT-004"]
@@ -90,6 +110,7 @@ def test_reference_missing_type_and_year():
     assert len(fmt5) == 1
     assert "文献类型标识" in fmt5[0]["suggestion"]
     assert "出版年份" in fmt5[0]["suggestion"]
+    assert fmt5[0]["paragraph_id"] == ""
 
 
 def test_abstract_length_and_keyword_count():

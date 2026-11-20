@@ -495,6 +495,8 @@ select.input { cursor: pointer; }
   white-space: pre-wrap;
 }
 .issue-sug { font-size: 12.5px; margin-top: 6px; }
+.issue-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.issue-ai { font-size: 12px; padding: 4px 10px; }
 
 .paper-similar-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
 .similar-item {
@@ -691,6 +693,25 @@ select.input { cursor: pointer; }
 .modal-title { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 .modal-card .hint-line { margin-top: 12px; }
+.paper-table-card {
+  max-width: 920px; width: min(920px, calc(100vw - 32px));
+  max-height: 86vh; display: flex; flex-direction: column;
+}
+.paper-table-meta { font-size: 12px; margin-bottom: 10px; word-break: break-all; }
+.paper-table-view { overflow: auto; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.paper-table-view > p { margin: 10px 12px; }
+.paper-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.paper-table th, .paper-table td {
+  border: 1px solid var(--border); padding: 7px 10px;
+  text-align: left; vertical-align: top; white-space: pre-wrap; word-break: break-word;
+}
+.paper-table th { background: var(--surface-muted); font-weight: 600; }
+.paper-table tbody tr:nth-child(even) td { background: var(--surface-muted); }
+.paper-table-note { font-size: 12px; color: var(--text-secondary); margin: 8px 12px; }
+.paper-table-fallback {
+  margin: 10px 12px; padding: 10px; background: var(--surface-muted);
+  border-radius: var(--radius-sm); font-size: 12px; white-space: pre-wrap; word-break: break-all;
+}
 .report-preview-dialog {
   width: min(960px, calc(100% - 24px)); max-height: calc(100dvh - 24px); margin: auto;
   padding: 18px 22px; border: 1px solid var(--border); border-radius: var(--radius);

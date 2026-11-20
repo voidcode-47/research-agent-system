@@ -161,7 +161,7 @@ DEAI_REWRITE_PROMPT = PAPER_JSON_RULES + """
 - 保留原意、术语、数据与引用，不增删事实，不编造内容；
 - 去 AI 力度：{strength_label}（{strength_desc}）；
 - 必须保留：{keep}；禁用表达：{banned}；
-- 改写模式：{mode_label}；用户补充要求：{instruction}；
+- 改写模式：{mode_label}；本次改写重点：{mode_focus}；用户补充要求：{instruction}；
 - 全局改写方针（来自全文分析；用户补充要求优先于本方针，本方针优先于默认风格；与原文事实冲突时以原文为准）：
 {guideline}
 - 不要为降低 AI 味引入口语化表达、错别字或刻意病句；
@@ -181,6 +181,7 @@ PAPER_QA_PROMPT = PAPER_JSON_RULES + """
 输出 JSON：
 {
   "answer": "回答正文（中文，简洁准确）",
-  "basis": ["依据的章节或原文片段1", "依据2"]
+  "basis": ["依据的来源编号，只能取上下文中出现的 p_xxxx 或 t_xxxx"]
 }
+上下文中的 [p_xxxx …] 为正文段落、[t_xxxx …] 为表格；章节路径与页码仅用于定位。
 """

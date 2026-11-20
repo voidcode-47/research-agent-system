@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<link rel="stylesheet" href="/style.css?v=ad9436501396">
+<link rel="stylesheet" href="/style.css?v=e530f8f8adc7">
 </head>
 <body>
 <div class="layout">
@@ -509,6 +509,18 @@
   </div>
 </div>
 
+<!-- ======================= 论文表格定位 ======================= -->
+<div id="paper-table-modal" class="modal-mask hidden">
+  <div class="modal-card paper-table-card">
+    <div class="modal-title" id="paper-table-title">表格</div>
+    <div class="paper-table-meta muted" id="paper-table-meta"></div>
+    <div class="paper-table-view" id="paper-table-view"></div>
+    <div class="modal-actions">
+      <button type="button" id="btn-paper-table-close" class="btn btn-ghost">关闭</button>
+    </div>
+  </div>
+</div>
+
 <dialog id="custom-provider-dialog" class="provider-dialog" aria-labelledby="custom-provider-title">
   <form id="custom-provider-form">
     <h2 id="custom-provider-title" class="modal-title">新增自定义服务</h2>
@@ -565,6 +577,6 @@
 </dialog>
 
 <script src="/app.js?v=32179c9c6471"></script>
-<script src="/paper.js?v=e0eab238ccbd"></script>
+<script src="/paper.js?v=f78a312969b5"></script>
 </body>
 </html>

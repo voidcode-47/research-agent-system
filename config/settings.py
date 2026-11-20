@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     # 已结束任务在内存中的保留分钟数；0 表示不按时间清理，仅受数量硬上限
     PAPER_TASK_RETENTION_MINUTES: int = Field(default=1440, ge=0, le=525600)
 
+    # 论文问答上下文字符预算（章节路径 + 召回片段 + 相邻段落的硬上限）
+    PAPER_QA_CONTEXT_CHARS: int = Field(default=3600, ge=600, le=20000)
+
     # 每日 LLM 调用配额（按 key 计数，论文任务默认 local）
     DAILY_QUOTA: int = Field(default=30, ge=0)
 

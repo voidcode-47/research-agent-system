@@ -16,6 +16,7 @@ const paperState = {
   guideline: null,
   sections: [],
   paragraphs: [],
+  tables: [],
   diagTimer: null,
   simTimer: null,
   guideTimer: null,
@@ -58,6 +59,12 @@ const PAPER_DIM_LABELS = {
 
 const PAPER_DIM_ORDER = ["level", "feasibility", "format", "deai"];
 
+const PAPER_MODE_LABELS = {
+  deai: "去 AI 味",
+  polish: "学术润色",
+  tighten: "精简压缩",
+};
+
 // ---------- 通用 ----------
 function pwAlert(msg, kind, step) {
   // step 用于异步回调：只在对应步骤仍处于激活状态时展示，避免旧步骤提示串到新步骤
@@ -70,6 +77,10 @@ function pwAlert(msg, kind, step) {
 
 function pwHideAlert() {
   $("paper-alert").classList.add("hidden");
+}
+
+function pwRewriteLimit() {
+  return Number((paperState.options || {}).rewrite_max_chars) || 2000;
 }
 
 function pwSetStep(n, force) {
@@ -377,7 +388,13 @@ async function initPaperPage() {
   $("btn-paper-ask").addEventListener("click", () => pwAsk().catch(pwError));
   $("paper-ask-answer").addEventListener("click", (e) => {
     const source = e.target.closest("[data-ask-basis]");
-    if (source) pwAskOpenBasis(source.dataset.askBasis).catch(pwError);
+    if (source) {
+      pwAskOpenBasis(source.dataset.askBasis, source.dataset.askKind || "").catch(pwError);
+    }
+  });
+  $("btn-paper-table-close").addEventListener("click", pwCloseTable);
+  $("paper-table-modal").addEventListener("click", (e) => {
+    if (e.target === $("paper-table-modal")) pwCloseTable();
   });
   $("paper-ask-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") pwAsk().catch(pwError);
@@ -395,9 +412,13 @@ async function initPaperPage() {
       }
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && $("paper-ask-dock").classList.contains("open")) {
-        pwAskOpen(false);
+      if (e.key !== "Escape") return;
+      const modal = $("paper-table-modal");
+      if (modal && !modal.classList.contains("hidden")) {
+        pwCloseTable();
+        return;
       }
+      if ($("paper-ask-dock").classList.contains("open")) pwAskOpen(false);
     });
   }
   $("paper-steps").addEventListener("click", (e) => {
@@ -409,9 +430,16 @@ async function initPaperPage() {
     pwSetStep(target);
   });
   $("paper-issues").addEventListener("click", (e) => {
+    const aiBtn = e.target.closest(".issue-ai");
+    if (aiBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      pwAiRewriteIssue(aiBtn.dataset.pid, aiBtn.dataset.instruction || "", aiBtn.dataset.mode || "").catch(pwError);
+      return;
+    }
     const item = e.target.closest(".issue-item");
     if (!item || !item.dataset.pid) return;
-    pwGotoParagraph(item.dataset.pid).catch(pwError);
+    pwGotoIssue(item.dataset.pid, item.dataset.instruction || "", item.dataset.mode || "").catch(pwError);
   });
 
   try {
@@ -552,6 +580,8 @@ function pwResetPaper() {
   paperState.maxStep = 1;
   paperState.paragraphs = [];
   paperState.sections = [];
+  paperState.tables = [];
+  pwCloseTable();
   $("paper-upload-result").innerHTML = "";
   $("paper-dim-cards").innerHTML = "";
   $("paper-total-score").textContent = "";
@@ -637,6 +667,8 @@ async function pwLoadPaper(paperId, opts = {}) {
   paperState.selected = null;
   paperState.rewrite = null;
   paperState.guideline = null;
+  paperState.tables = [];
+  pwCloseTable();
   if (paperState.guideTaskId) {
     paperState.guideTaskId = "";
     paperState.guidePaperId = "";
@@ -1059,6 +1091,12 @@ function pwRenderDiagnosis(dims, total) {
   pwRenderIssues(dims);
 }
 
+function pwIssueRewriteMode(dimKey, it) {
+  if (dimKey === "deai") return "deai";
+  if (it.rule_id === "FMT-009") return "tighten";
+  return "polish";
+}
+
 function pwRenderIssues(dims) {
   const box = $("paper-issues");
   const rows = [];
@@ -1070,8 +1108,10 @@ function pwRenderIssues(dims) {
       const title = it.rule_id || it.issue || PAPER_DIM_LABELS[key];
       const page = it.page ? `第 ${it.page} 页` : "";
       const loc = it.paragraph_id || "";
+      const instruction = it.suggestion || it.issue || "";
+      const mode = pwIssueRewriteMode(key, it);
       rows.push(
-        `<div class="issue-item sev-${sev}" data-pid="${esc(loc)}" data-page="${esc(it.page || "")}">
+        `<div class="issue-item sev-${sev}" data-pid="${esc(loc)}" data-page="${esc(it.page || "")}" data-instruction="${esc(instruction)}" data-mode="${esc(mode)}">
            <div class="issue-head">
              <span class="sev-tag">${sev === "high" ? "高" : sev === "medium" ? "中" : "低"}</span>
              <b>${esc(title)}</b>
@@ -1080,20 +1120,58 @@ function pwRenderIssues(dims) {
            ${it.evidence ? `<blockquote>${esc(it.evidence)}</blockquote>` : ""}
            ${it.suggestion ? `<p class="issue-sug">建议：${esc(it.suggestion)}</p>` : ""}
            ${it.basis ? `<p class="muted">依据：${esc(it.basis)}</p>` : ""}
+           ${loc ? `<div class="issue-actions"><button class="btn btn-ghost issue-ai" data-pid="${esc(loc)}" data-instruction="${esc(instruction)}" data-mode="${esc(mode)}">AI 改写并审核</button></div>` : ""}
          </div>`
       );
     });
   });
   box.innerHTML = rows.length
-    ? `<div class="section-title">问题清单（点击带段落的条目可定位改写）</div>${rows.join("")}`
+    ? `<div class="section-title">问题清单（点击条目自动填入建议并匹配改写模式；点「AI 改写并审核」先生成改写稿，逐处对比后再采纳）</div>${rows.join("")}`
     : '<p class="muted">暂无问题条目。</p>';
+}
+
+function pwApplyIssueRewrite(instruction, mode) {
+  $("paper-instruction").value = (instruction || "").trim();
+  if (!mode) return;
+  const sel = $("paper-mode");
+  if (!pwHasOption(sel, mode)) {
+    const opt = document.createElement("option");
+    opt.value = mode;
+    opt.textContent = PAPER_MODE_LABELS[mode] || mode;
+    sel.appendChild(opt);
+  }
+  sel.value = mode;
+  pwAlert(`已自动填入该条建议，改写模式：${PAPER_MODE_LABELS[mode] || mode}`, "ok", 5);
+}
+
+async function pwGotoIssue(pid, instruction, mode) {
+  await pwGotoParagraph(pid);
+  if (!paperState.selected || paperState.selected.id !== pid) return;
+  pwApplyIssueRewrite(instruction, mode);
 }
 
 async function pwGotoParagraph(pid) {
   await pwLoadParagraphs();
+  if (!(paperState.paragraphs || []).some((p) => p.id === pid)) {
+    pwAlert("该问题定位到的内容不是可改写正文（可能是标题、目录、题注或参考文献）。", "warn");
+    return;
+  }
   await pwSelectParagraph(pid);
   if (!paperState.selected || paperState.selected.id !== pid) return;
   pwSetStep(5, true);
+}
+
+async function pwAiRewriteIssue(pid, instruction, mode) {
+  if (!paperState.paperId) { pwAlert("请先上传论文", "warn"); return; }
+  await pwGotoParagraph(pid);
+  if (!paperState.selected || paperState.selected.id !== pid) return;
+  const limit = pwRewriteLimit();
+  if ((paperState.selected.text || "").length > limit) {
+    pwAlert(`该段超过 ${limit} 字，请先在原文中拆分后再改写。`, "warn");
+    return;
+  }
+  pwApplyIssueRewrite(instruction, mode);
+  await pwRewrite();
 }
 
 // ---------- 相似论文 ----------
@@ -1231,7 +1309,10 @@ async function pwLoadParagraphs() {
   try {
     const data = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}/paragraphs${qs}`);
     paperState.sections = data.sections || [];
-    paperState.paragraphs = data.paragraphs || [];
+    paperState.paragraphs = (data.paragraphs || []).filter(
+      (p) => p.type === "body" && !p.table_id
+    );
+    paperState.tables = data.tables || [];
     pwFillSectionFilter();
     pwRenderParagraphs();
   } catch (e) {
@@ -1264,7 +1345,7 @@ function pwRenderParagraphs() {
   box.innerHTML = list.map((p) => {
     const sec = p.section ? ` · ${esc(p.section)}` : "";
     const type = p.type === "body" ? "" : `<span class="chip">${esc(p.type)}</span>`;
-    const selectable = p.type === "body" && (p.text || "").length <= 800;
+    const selectable = p.type === "body" && (p.text || "").length <= pwRewriteLimit();
     const checked = selectable && paperState.batchIds.has(p.id);
     const check = selectable
       ? `<input type="checkbox" class="para-check" data-id="${esc(p.id)}"${checked ? " checked" : ""} title="勾选后可批量改写">`
@@ -1651,8 +1732,9 @@ function pwRewriteBusy(busy) {
 async function pwRewrite() {
   if (!paperState.paperId) { pwAlert("请先上传论文", "warn"); return; }
   if (!paperState.selected) { pwAlert("请先在左侧选择一个段落", "warn"); return; }
-  if ((paperState.selected.text || "").length > 800) {
-    pwAlert("该段超过 800 字，请先在原文中拆分后再改写。", "warn");
+  const limit = pwRewriteLimit();
+  if ((paperState.selected.text || "").length > limit) {
+    pwAlert(`该段超过 ${limit} 字，请先在原文中拆分后再改写。`, "warn");
     return;
   }
   if (paperState.rewriteTaskId) return;
@@ -2113,19 +2195,102 @@ function pwAskOpen(open) {
   }
 }
 
-function pwRenderAskBasis(basis) {
-  const sources = [...new Set((basis || []).map((id) => String(id || "").trim()).filter(Boolean))];
-  if (!sources.length) return "";
-  return `<div class="ask-basis"><span>依据</span>${sources.map((id) =>
-    `<button type="button" class="chip basis-source-link" data-ask-basis="${esc(id)}" aria-label="查看原文段落 ${esc(id)}" title="查看原文段落">${esc(id)}</button>`
-  ).join("")}</div>`;
+function pwRenderAskBasis(basis, evidence) {
+  const items = [];
+  const seen = new Set();
+  const info = new Map();
+  const add = (id, kind, meta) => {
+    const key = `${kind}:${id}`;
+    if (!id || seen.has(key)) return;
+    seen.add(key);
+    items.push({ id, kind });
+    if (meta) info.set(key, meta);
+  };
+  (evidence || []).forEach((item) => {
+    if (!item || !item.id) return;
+    const kind = item.kind === "table" ? "table" : "paragraph";
+    add(String(item.id).trim(), kind, item);
+  });
+  (basis || []).forEach((id) => {
+    const value = String(id || "").trim();
+    if (!value) return;
+    add(value, value.startsWith("t_") ? "table" : "paragraph");
+  });
+  if (!items.length) return "";
+  return `<div class="ask-basis"><span>依据</span>${items.map((item) => {
+    const table = item.kind === "table";
+    const meta = info.get(`${item.kind}:${item.id}`) || {};
+    let label = item.id;
+    if (table) {
+      const caption = String(meta.caption || "").trim();
+      label = caption ? `${item.id} ${caption.slice(0, 24)}` : `${item.id} 表格`;
+    }
+    const text = table ? "查看表格" : "查看原文段落";
+    return `<button type="button" class="chip basis-source-link${table ? " basis-table" : ""}" data-ask-basis="${esc(item.id)}" data-ask-kind="${item.kind}" aria-label="${text} ${esc(item.id)}" title="${text}">${esc(label)}</button>`;
+  }).join("")}</div>`;
 }
 
-async function pwAskOpenBasis(paragraphId) {
-  if (!paperState.paperId || !paragraphId) return;
+function pwCloseTable() {
+  const modal = $("paper-table-modal");
+  if (modal) modal.classList.add("hidden");
+}
+
+async function pwOpenTable(tableId) {
+  if (!paperState.paperId || !tableId) return;
+  let tables = paperState.tables || [];
+  if (!tables.some((t) => t && t.id === tableId)) {
+    try {
+      const data = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}/tables`);
+      paperState.tables = data.tables || [];
+      tables = paperState.tables;
+    } catch (e) {
+      pwAlert("加载表格失败：" + e.message, "err");
+      return;
+    }
+  }
+  const table = tables.find((t) => t && t.id === tableId);
+  if (!table) {
+    pwAlert(`未找到表格 ${tableId}，可能是旧版论文数据，请重新上传后定位。`, "warn");
+    return;
+  }
+  const page = table.page ? `第 ${table.page} 页` : "页码未知";
+  const meta = [table.id, page, table.section || "", table.source === "pdf" ? "PDF 识别" : "Word 读取"];
+  $("paper-table-title").textContent = table.caption || `表格 ${table.id}`;
+  $("paper-table-meta").textContent = meta.filter(Boolean).join(" · ");
+  const rows = Array.isArray(table.rows) ? table.rows : [];
+  const headerRows = Math.max(0, Math.min(Number(table.header_rows) || 0, rows.length));
+  let html = "";
+  if (rows.length) {
+    const cells = (row, tag) => (row || []).map((cell) =>
+      `<${tag}>${esc(String(cell == null ? "" : cell))}</${tag}>`).join("");
+    const head = rows.slice(0, headerRows).map((row) => `<tr>${cells(row, "th")}</tr>`).join("");
+    const body = rows.slice(headerRows).map((row) => `<tr>${cells(row, "td")}</tr>`).join("");
+    html = `<table class="paper-table">${head ? `<thead>${head}</thead>` : ""}<tbody>${body}</tbody></table>`;
+  } else if (table.fallback_text) {
+    html = `<p class="muted">未能识别表格结构，以下为原文中保留的表格文字：</p><pre class="paper-table-fallback">${esc(table.fallback_text)}</pre>`;
+  } else {
+    html = '<p class="muted">该表格没有可显示的行列数据。</p>';
+  }
+  if (table.units) html += `<p class="paper-table-note">单位：${esc(table.units)}</p>`;
+  (table.footnotes || []).forEach((note) => {
+    html += `<p class="paper-table-note">${esc(note)}</p>`;
+  });
+  if (table.status === "fallback" && table.note) {
+    html += `<p class="paper-table-note stale">${esc(table.note)}</p>`;
+  }
+  $("paper-table-view").innerHTML = html;
+  $("paper-table-modal").classList.remove("hidden");
+}
+
+async function pwAskOpenBasis(id, kind) {
+  if (!paperState.paperId || !id) return;
+  if (kind === "table" || String(id).startsWith("t_")) {
+    await pwOpenTable(id);
+    return;
+  }
   pwAskOpen(true);
-  await pwGotoParagraph(paragraphId);
-  if (!paperState.selected || paperState.selected.id !== paragraphId) return;
+  await pwGotoParagraph(id);
+  if (!paperState.selected || paperState.selected.id !== id) return;
   $("paper-original").scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
@@ -2147,7 +2312,7 @@ async function pwAsk() {
     if (r.rejected) {
       $("paper-ask-answer").innerHTML = `<p class="muted">${esc(r.answer)}</p>`;
     } else {
-      const basis = pwRenderAskBasis(r.basis);
+      const basis = pwRenderAskBasis(r.basis, r.evidence);
       $("paper-ask-answer").innerHTML = `<div class="markdown">${renderMarkdown(r.answer)}</div>${basis}`;
       $("paper-ask-input").value = "";
       pwRefreshQuota();

@@ -45,7 +45,47 @@ def _set_style_font(style, font_name: str, size_pt: float) -> None:
     rfonts.set(qn("w:eastAsia"), font_name)
 
 
-def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None) -> BytesIO:
+def _add_docx_table(doc, table: dict, font_name: str, size: float) -> None:
+    rows = table.get("rows") or []
+    if not rows:
+        fallback = str(table.get("fallback_text") or "").strip()
+        if fallback:
+            para = doc.add_paragraph()
+            run = para.add_run(fallback)
+            _set_run_font(run, font_name, size)
+        return
+    cols = max(len(r) for r in rows)
+    if cols <= 0:
+        return
+    header_rows = max(0, int(table.get("header_rows") or 0))
+    out = doc.add_table(rows=len(rows), cols=cols)
+    out.style = "Table Grid"
+    for i, row in enumerate(rows):
+        for j in range(cols):
+            cell = out.rows[i].cells[j]
+            cell.text = ""
+            value = str(row[j]) if j < len(row) else ""
+            run = cell.paragraphs[0].add_run(value)
+            _set_run_font(run, font_name, max(8, size - 1), bold=i < header_rows)
+
+
+def _add_list_docx(doc, text: str, font_name: str, size: float, spacing: float) -> None:
+    """列表块在平台内是一段，导出时按条目还原为独立段落。"""
+    from docx.shared import Pt
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        para = doc.add_paragraph()
+        para.paragraph_format.line_spacing = spacing
+        para.paragraph_format.first_line_indent = Pt(size * 2)
+        run = para.add_run(line)
+        _set_run_font(run, font_name, size)
+
+
+def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None,
+                tables: list[dict] | None = None) -> BytesIO:
     """生成论文正文 docx：字体/字号/行距/标题层级/题注/首行缩进。"""
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -56,6 +96,9 @@ def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None)
     font_body = str(fmt.get("font_body") or "宋体")
     size = float(fmt.get("font_size_body_pt") or 12)
     spacing = float(fmt.get("line_spacing") or 1.5)
+    table_map = {
+        t.get("paragraph_id"): t for t in (tables or []) if t.get("paragraph_id")
+    }
 
     doc = Document()
     normal = doc.styles["Normal"]
@@ -83,6 +126,27 @@ def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None)
             para.paragraph_format.line_spacing = spacing
             run = para.add_run(text)
             _set_run_font(run, font_body, size)
+        elif ptype == "table":
+            table = table_map.get(p.get("id"))
+            if table:
+                _add_docx_table(doc, table, font_body, size)
+            else:
+                para = doc.add_paragraph()
+                para.paragraph_format.line_spacing = spacing
+                run = para.add_run(text)
+                _set_run_font(run, font_body, size)
+        elif ptype in ("cover", "toc"):
+            para = doc.add_paragraph()
+            para.paragraph_format.line_spacing = spacing
+            run = para.add_run(text)
+            _set_run_font(run, font_body, size)
+        elif ptype == "table_note":
+            para = doc.add_paragraph()
+            para.paragraph_format.line_spacing = spacing
+            run = para.add_run(text)
+            _set_run_font(run, font_body, max(9, size - 1.5))
+        elif p.get("list_items"):
+            _add_list_docx(doc, text, font_body, size, spacing)
         else:
             para = doc.add_paragraph()
             para.paragraph_format.line_spacing = spacing
@@ -152,7 +216,58 @@ def _pdf_font_names() -> tuple[str, str]:
     return body, heading
 
 
-def export_pdf(paper_id: str, paragraphs: list[dict], requirement: dict | None) -> BytesIO:
+def _add_pdf_table(story: list, table: dict, body_style, body_font: str,
+                   size: float, page_width: float) -> None:
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+    from xml.sax.saxutils import escape
+
+    rows = table.get("rows") or []
+    if not rows:
+        fallback = str(table.get("fallback_text") or "").strip()
+        if fallback:
+            story.append(Paragraph(escape(fallback), body_style))
+        return
+    cols = max(len(r) for r in rows)
+    if cols <= 0:
+        return
+    cell_style = ParagraphStyle(
+        "PaperTable",
+        parent=body_style,
+        fontSize=max(7, size - 2),
+        leading=max(8, (size - 2) * 1.35),
+        firstLineIndent=0,
+        alignment=0,
+        wordWrap="CJK",
+    )
+    data = []
+    for row in rows:
+        data.append([
+            Paragraph(escape(str(row[j]) if j < len(row) else ""), cell_style)
+            for j in range(cols)
+        ])
+    header_rows = max(0, int(table.get("header_rows") or 0))
+    table_flow = Table(
+        data,
+        colWidths=[page_width / cols] * cols,
+        repeatRows=min(header_rows, len(rows)),
+    )
+    style = [
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 3),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+    ]
+    if header_rows:
+        style.append(("BACKGROUND", (0, 0), (-1, header_rows - 1), colors.whitesmoke))
+    table_flow.setStyle(TableStyle(style))
+    story.append(table_flow)
+    story.append(Spacer(1, 6))
+
+
+def export_pdf(paper_id: str, paragraphs: list[dict], requirement: dict | None,
+               tables: list[dict] | None = None) -> BytesIO:
     """生成论文正文 PDF：字体/字号/行距/标题层级/题注/首行缩进。"""
     try:
         from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
@@ -167,6 +282,10 @@ def export_pdf(paper_id: str, paragraphs: list[dict], requirement: dict | None) 
     size = float(fmt.get("font_size_body_pt") or 12)
     spacing = float(fmt.get("line_spacing") or 1.5)
     body_font, heading_font = _pdf_font_names()
+    page_width = A4[0] - 144
+    table_map = {
+        t.get("paragraph_id"): t for t in (tables or []) if t.get("paragraph_id")
+    }
 
     body_style = ParagraphStyle(
         "PaperBody",
@@ -178,11 +297,23 @@ def export_pdf(paper_id: str, paragraphs: list[dict], requirement: dict | None) 
         wordWrap="CJK",
         spaceAfter=0,
     )
+    plain_style = ParagraphStyle(
+        "PaperPlain",
+        parent=body_style,
+        firstLineIndent=0,
+    )
     caption_style = ParagraphStyle(
         "PaperCaption",
         parent=body_style,
         firstLineIndent=0,
         alignment=TA_CENTER,
+    )
+    note_style = ParagraphStyle(
+        "PaperTableNote",
+        parent=body_style,
+        fontSize=max(9, size - 1.5),
+        leading=max(10, (size - 1.5) * spacing * 1.2),
+        firstLineIndent=0,
     )
     heading_sizes = {1: 16, 2: 14, 3: 13, 4: 12}
     heading_styles = {
@@ -209,6 +340,21 @@ def export_pdf(paper_id: str, paragraphs: list[dict], requirement: dict | None) 
             story.append(Paragraph(escape(text), heading_styles[level]))
         elif ptype == "caption":
             story.append(Paragraph(escape(text), caption_style))
+        elif ptype == "table":
+            table = table_map.get(p.get("id"))
+            if table:
+                _add_pdf_table(story, table, body_style, body_font, size, page_width)
+            else:
+                story.append(Paragraph(escape(text), body_style))
+        elif ptype in ("cover", "toc"):
+            story.append(Paragraph(escape(text), plain_style))
+        elif ptype == "table_note":
+            story.append(Paragraph(escape(text), note_style))
+        elif p.get("list_items"):
+            for line in text.split("\n"):
+                line = line.strip()
+                if line:
+                    story.append(Paragraph(escape(line), body_style))
         else:
             story.append(Paragraph(escape(text), body_style))
 

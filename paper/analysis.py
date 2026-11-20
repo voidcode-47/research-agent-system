@@ -120,7 +120,9 @@ def _paper_context(parsed: dict, max_chars: int = 6000) -> str:
 
     used = 0
     for p in parsed.get("paragraphs") or []:
-        if p.get("type") in ("heading", "caption"):
+        if p.get("type") in ("heading", "caption", "cover", "toc", "table", "table_note"):
+            continue
+        if p.get("table_id"):
             continue
         chunk = f"[{p.get('id')} 第{p.get('page')}页] {p.get('text') or ''}"
         if used + len(chunk) > max_chars:
@@ -145,13 +147,16 @@ def _score_trace(parsed: dict, requirement: dict, source: str) -> dict:
 
 
 def _text_stats(parsed: dict) -> str:
-    body = [p for p in parsed.get("paragraphs") or [] if p.get("type") == "body"]
+    body = [
+        p for p in parsed.get("paragraphs") or []
+        if p.get("type") == "body" and not p.get("table_id")
+    ]
     chars = sum(len(p.get("text") or "") for p in body)
     return (
         f"标题：{parsed.get('title') or '（未识别）'}\n"
         f"总字数：{parsed.get('text_chars') or chars}\n"
         f"章节数：{len(parsed.get('sections') or [])}\n"
-        f"段落数：{len(parsed.get('paragraphs') or [])}"
+        f"段落数：{len(body)}"
     )
 
 
@@ -299,7 +304,8 @@ def _diagnose_deai(gateway: LLMGateway, parsed: dict, requirement: dict,
     对用户的分数口径为“去 AI 味得分”= 100 − AI 味指数（越高越好）。
     """
     body_items = [
-        p for p in parsed.get("paragraphs") or [] if p.get("type") == "body"
+        p for p in parsed.get("paragraphs") or []
+        if p.get("type") == "body" and not p.get("table_id")
     ]
     body_text = "\n".join(p.get("text") or "" for p in body_items)
     det = detect(body_text)

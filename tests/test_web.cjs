@@ -242,7 +242,10 @@ test("paper Q&A evidence opens the source paragraph in the rewrite step", async 
   const { context, run } = loadPage();
   const calls = [];
   run('paperState.paperId = "paper-1"');
-  context.pwLoadParagraphs = async () => calls.push("load");
+  context.pwLoadParagraphs = async () => {
+    calls.push("load");
+    run('paperState.paragraphs = [{ id: "p_0006", type: "body", text: "正文" }]');
+  };
   context.pwSelectParagraph = async (id) => {
     calls.push(`select:${id}`);
     run(`paperState.selected = { id: "${id}" }`);
@@ -254,6 +257,24 @@ test("paper Q&A evidence opens the source paragraph in the rewrite step", async 
   assert.deepEqual(calls, ["load", "select:p_0006", "step:5:true"]);
 });
 
+test("issue jump warns when the target is not a rewritable body paragraph", async () => {
+  const { context, run } = loadPage();
+  const calls = [];
+  const alerts = [];
+  run('paperState.paperId = "paper-1"');
+  context.pwLoadParagraphs = async () => {
+    run('paperState.paragraphs = [{ id: "p_0006", type: "body", text: "正文" }]');
+  };
+  context.pwSelectParagraph = async () => calls.push("select");
+  context.pwSetStep = () => calls.push("step");
+  context.pwAlert = (msg) => alerts.push(msg);
+
+  await run('pwGotoParagraph("p_0001")');
+
+  assert.deepEqual(calls, []);
+  assert.ok(alerts[0].includes("不是可改写正文"));
+});
+
 test("paper Q&A renders deduplicated and safely escaped source buttons", () => {
   const { run } = loadPage();
 
@@ -263,6 +284,151 @@ test("paper Q&A renders deduplicated and safely escaped source buttons", () => {
   assert.ok(markup.includes('data-ask-basis="p_0006"'));
   assert.ok(markup.includes("&quot; onclick=&quot;"));
   assert.ok(!markup.includes('data-ask-basis="x" onclick='));
+});
+
+test("paper Q&A renders table evidence with caption", () => {
+  const { run } = loadPage();
+
+  const markup = run(`pwRenderAskBasis([], [{
+    kind: "table", id: "t_0001", caption: "表 1 消融实验结果",
+    section_path: "2 实验 / 2.1 消融实验"
+  }])`);
+
+  assert.ok(markup.includes('data-ask-basis="t_0001"'));
+  assert.ok(markup.includes('data-ask-kind="table"'));
+  assert.ok(markup.includes("basis-table"));
+  assert.ok(markup.includes("表 1 消融实验结果"));
+});
+
+test("diagnosis issues with a paragraph offer AI rewrite prefilled with the suggestion", () => {
+  const { run } = loadPage();
+  run(`pwRenderIssues(${JSON.stringify({
+    format: {
+      issues: [
+        {
+          rule_id: "FMT-008", severity: "low", issue: "标点",
+          suggestion: "中文语句统一使用全角标点", paragraph_id: "p_0007",
+        },
+        { issue: "全文性问题", severity: "medium" },
+      ],
+    },
+  })})`);
+  const html = run('document.getElementById("paper-issues").innerHTML');
+  assert.ok(html.includes("AI 改写并审核"));
+  assert.ok(html.includes('data-instruction="中文语句统一使用全角标点"'));
+  assert.ok(html.includes('data-mode="polish"'));
+  assert.equal((html.match(/class="btn btn-ghost issue-ai"/g) || []).length, 1);
+});
+
+test("diagnosis rewrite mode matches the issue type", () => {
+  const { run } = loadPage();
+  assert.equal(run('pwIssueRewriteMode("deai", { rule_id: "AI-003" })'), "deai");
+  assert.equal(run('pwIssueRewriteMode("format", { rule_id: "FMT-009" })'), "tighten");
+  assert.equal(run('pwIssueRewriteMode("format", { rule_id: "FMT-008" })'), "polish");
+  assert.equal(run('pwIssueRewriteMode("level", {})'), "polish");
+});
+
+test("rewrite limit follows server options and reports the configured value", async () => {
+  const { context, run } = loadPage();
+  run('paperState.options = { rewrite_max_chars: 2000 }; paperState.paperId = "paper-1"; paperState.selected = { id: "p_0001", text: "字".repeat(2500) }');
+  assert.equal(run("pwRewriteLimit()"), 2000);
+  const alerts = [];
+  context.pwAlert = (msg) => alerts.push(msg);
+
+  await run("pwRewrite()");
+
+  assert.equal(alerts.length, 1);
+  assert.ok(alerts[0].includes("2000"));
+});
+
+test("clicking an issue auto-fills its suggestion and rewrite mode", async () => {
+  const { context, run } = loadPage();
+  const calls = [];
+  run('paperState.paperId = "paper-1"; paperState.step = 5');
+  run('document.getElementById("paper-mode").options = [{ value: "deai" }, { value: "polish" }, { value: "tighten" }]');
+  context.pwGotoParagraph = async (id) => {
+    calls.push(`goto:${id}`);
+    run(`paperState.selected = { id: "${id}", text: "原文" }`);
+  };
+
+  await run('pwGotoIssue("p_0007", "中文语句统一使用全角标点", "polish")');
+
+  assert.deepEqual(calls, ["goto:p_0007"]);
+  assert.equal(
+    run('document.getElementById("paper-instruction").value'),
+    "中文语句统一使用全角标点",
+  );
+  assert.equal(run('document.getElementById("paper-mode").value'), "polish");
+  assert.equal(
+    run('document.getElementById("paper-alert").textContent'),
+    "已自动填入该条建议，改写模式：学术润色",
+  );
+});
+
+test("issue rewrite mode is added to the select when options are not loaded", () => {
+  const { run } = loadPage();
+  run('paperState.step = 5; pwApplyIssueRewrite("建议", "tighten")');
+
+  assert.equal(run('document.getElementById("paper-mode").value'), "tighten");
+  assert.equal(run('document.getElementById("paper-mode").children.length'), 1);
+});
+
+test("diagnosis AI rewrite jumps to the paragraph and starts the rewrite", async () => {
+  const { context, run } = loadPage();
+  const calls = [];
+  run('paperState.paperId = "paper-1"');
+  run('document.getElementById("paper-mode").options = [{ value: "deai" }, { value: "polish" }, { value: "tighten" }]');
+  context.pwGotoParagraph = async (id) => {
+    calls.push(`goto:${id}`);
+    run(`paperState.selected = { id: "${id}", text: "原文" }`);
+  };
+  context.pwRewrite = async () => calls.push("rewrite");
+
+  await run('pwAiRewriteIssue("p_0007", "中文语句统一使用全角标点", "polish")');
+
+  assert.deepEqual(calls, ["goto:p_0007", "rewrite"]);
+  assert.equal(
+    run('document.getElementById("paper-instruction").value'),
+    "中文语句统一使用全角标点",
+  );
+  assert.equal(run('document.getElementById("paper-mode").value'), "polish");
+});
+
+test("paper Q&A table evidence opens the table instead of a paragraph", async () => {
+  const { context, run } = loadPage();
+  const calls = [];
+  run('paperState.paperId = "paper-1"');
+  context.pwOpenTable = async (id) => calls.push(`table:${id}`);
+  context.pwGotoParagraph = async (id) => calls.push(`para:${id}`);
+
+  await run('pwAskOpenBasis("t_0001", "table")');
+  await run('pwAskOpenBasis("p_0006", "paragraph")');
+
+  assert.deepEqual(calls, ["table:t_0001", "para:p_0006"]);
+});
+
+test("paper table view keeps header, empty cells and closes", async () => {
+  const { elements, run } = loadPage();
+  const table = {
+    id: "t_0001", caption: "表 1 消融实验结果", page: 3,
+    section: "2.1 消融实验", source: "docx", status: "ok",
+    header_rows: 1, units: "%", footnotes: ["注：均值为三次实验。"],
+    rows: [["模型", "准确率（%）", "备注"], ["基线", "88.1", ""]],
+  };
+  run(`paperState.paperId = "paper-1"; paperState.tables = ${JSON.stringify([table])}`);
+
+  await run('pwOpenTable("t_0001")');
+
+  assert.equal(elements.get("paper-table-title").textContent, "表 1 消融实验结果");
+  assert.ok(elements.get("paper-table-meta").textContent.includes("第 3 页"));
+  const view = elements.get("paper-table-view").innerHTML;
+  assert.ok(view.includes("<th>模型</th>"));
+  assert.ok(view.includes("<td>88.1</td>"));
+  assert.ok(view.includes("<td></td>"));
+  assert.equal(elements.get("paper-table-modal").classList.contains("hidden"), false);
+
+  run("pwCloseTable()");
+  assert.equal(elements.get("paper-table-modal").classList.contains("hidden"), true);
 });
 
 test("history reports expose preview and download actions", async () => {

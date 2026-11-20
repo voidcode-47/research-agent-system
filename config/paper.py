@@ -118,7 +118,6 @@ REWRITE_MODES: dict[str, str] = {
     "deai": "去 AI 味",
     "polish": "学术润色",
     "tighten": "精简压缩",
-    "academic": "学术化表达",
 }
 
 # 必须保留项（需求确认时的多选）
@@ -152,7 +151,7 @@ LLM_TASKS: dict[str, dict] = {
     "level_diagnose": {"label": "论文层次诊断", "max_tokens": 2500},
     "feasibility": {"label": "内容可实现性评估", "max_tokens": 2500},
     "deai_detect": {"label": "AI 味检测与建议", "max_tokens": 1600},
-    "deai_rewrite": {"label": "段落改写", "max_tokens": 1600},
+    "deai_rewrite": {"label": "段落改写", "max_tokens": 4096},
     "rewrite_guide": {"label": "全局改写方针", "max_tokens": 4096},
     "paper_qa": {"label": "论文问答", "max_tokens": 1500},
 }

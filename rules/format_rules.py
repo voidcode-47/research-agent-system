@@ -28,7 +28,18 @@ def _issue(rule_id: str, severity: str, page, paragraph_id: str,
 
 
 def _body_paragraphs(parsed: dict) -> list[dict]:
-    return [p for p in parsed.get("paragraphs") or [] if p.get("type") == "body"]
+    return [
+        p for p in parsed.get("paragraphs") or []
+        if p.get("type") == "body" and not p.get("table_id")
+    ]
+
+
+def _first_body_pid(section: dict, body_ids: set[str]) -> str:
+    """定位到章节内首个正文段，避免把标题/目录当作可改写目标。"""
+    return next(
+        (pid for pid in section.get("paragraph_ids") or [] if pid in body_ids),
+        "",
+    )
 
 
 def _numbering_level1(sections: list[dict]) -> list[tuple[int, dict]]:
@@ -47,6 +58,7 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
     paragraphs = parsed.get("paragraphs") or []
     sections = parsed.get("sections") or []
     body = _body_paragraphs(parsed)
+    body_ids = {p.get("id") for p in body}
     refs = [p for p in paragraphs if p.get("type") == "reference"]
     captions = [p for p in paragraphs if p.get("type") == "caption"]
     keywords = parsed.get("keywords") or []
@@ -87,7 +99,7 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
     for s in sections:
         level = int(s.get("level") or 1)
         if prev_level and level > prev_level + 1:
-            first_pid = (s.get("paragraph_ids") or [""])[0]
+            first_pid = _first_body_pid(s, body_ids)
             issues.append(_issue(
                 "FMT-002", "medium", s.get("page"), first_pid,
                 f"章节「{s.get('title')}」层级为 {level}，上一节为 {prev_level}",
@@ -100,7 +112,7 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
     numbered = _numbering_level1(sections)
     for (a_num, a_s), (b_num, b_s) in zip(numbered, numbered[1:]):
         if b_num > a_num + 1:
-            first_pid = (b_s.get("paragraph_ids") or [""])[0]
+            first_pid = _first_body_pid(b_s, body_ids)
             issues.append(_issue(
                 "FMT-003", "medium", b_s.get("page"), first_pid,
                 f"章节编号从 {a_num} 跳到 {b_num}",
@@ -145,7 +157,7 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
             if lacks_year:
                 missing_bits.append("出版年份")
             issues.append(_issue(
-                "FMT-005", "medium", p.get("page"), p.get("id"),
+                "FMT-005", "medium", p.get("page"), "",
                 text, "补充" + "与".join(missing_bits),
                 "GB/T 7714 参考文献著录规则",
             ))
