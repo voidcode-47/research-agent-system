@@ -45,6 +45,7 @@ class _FakeLLM:
 
     def __init__(self):
         self.calls = []
+        self.call_options = []
         self.payload = {
             "score": 82,
             "summary": "总体结构完整，方法描述可进一步细化。",
@@ -85,6 +86,7 @@ class _FakeLLM:
 
     def chat(self, messages, **kwargs):
         self.calls.append(messages)
+        self.call_options.append(kwargs)
         return ChatResponse(content=json.dumps(self.payload, ensure_ascii=False),
                             usage={"total_tokens": 20})
 
@@ -393,6 +395,9 @@ def test_diagnose_end_to_end_and_stale(env, tmp_path):
     detail = client.get(f"/api/paper/{pid}").json()
     assert all(detail["analyzed"].values())
     assert detail["analysis_results"]["level"]["score"] == 82
+    assert detail["analysis_results"]["level"]["score_source"] == "llm:temperature=0"
+    assert len(detail["analysis_results"]["level"]["input_fingerprint"]) == 16
+    assert detail["analysis_results"]["format"]["score_source"] == "rules:format_rules"
     assert detail["analysis"]["format"]["stale"] is False
     assert detail["total_score"] == report["total_score"]
 
@@ -403,6 +408,20 @@ def test_diagnose_end_to_end_and_stale(env, tmp_path):
     assert not any(detail2["analyzed"].values())
     assert detail2["analysis_results"]["level"]["stale"] is True
     assert detail2["total_score"] is None
+
+
+def test_model_scored_dimensions_use_deterministic_temperature(env, tmp_path):
+    from paper.analysis import _diagnose_feasibility, _diagnose_level
+    from llm.gateway import LLMGateway
+
+    parsed = {"title": "Testing Paper", "paragraphs": [], "sections": []}
+    requirement = {"level": "undergraduate"}
+    gateway = LLMGateway(env)
+
+    _diagnose_level(gateway, parsed, requirement, "p_test")
+    _diagnose_feasibility(gateway, parsed, requirement, "p_test")
+
+    assert [call["temperature"] for call in env.call_options] == [0, 0]
 
 
 def test_diagnose_partial_dimensions(env, tmp_path):

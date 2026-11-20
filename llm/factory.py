@@ -62,8 +62,31 @@ class LLMFactory:
         Returns:
             BaseLLM 实例
         """
-        provider = (provider or settings.DEFAULT_LLM_PROVIDER).lower()
-        config = get_provider_config(provider)
+        if not provider:
+            provider = settings.DEFAULT_LLM_PROVIDER
+            try:
+                from utils.prefs import load_prefs
+                preferred = load_prefs().get("provider")
+                if preferred:
+                    provider = preferred
+            except Exception:
+                pass
+            if provider == "custom":
+                provider = "custom:legacy"
+            try:
+                get_provider_config(provider)
+            except ValueError:
+                from config.llm_config import list_providers
+                choices = list_providers()
+                provider = choices[0] if choices else ""
+        provider = (provider or "").lower()
+        legacy_custom = provider == "custom"
+        config = ({
+            "label": "旧版自定义 API", "default_model": settings.CUSTOM_API_MODEL,
+            "models": [settings.CUSTOM_API_MODEL] if settings.CUSTOM_API_MODEL else [],
+            "base_url": settings.CUSTOM_API_BASE_URL, "protocol": "openai",
+            "service_id": "legacy", "custom": True,
+        } if legacy_custom else get_provider_config(provider))
         is_local = config.get("local", False)
         # model=None/"" 时：云端用默认模型，本地空串则触发自动发现
         if model:
@@ -72,25 +95,36 @@ class LLMFactory:
             chosen_model = settings.LMSTUDIO_MODEL  # 空串 = 自动发现
         elif is_local and provider == "ollama":
             chosen_model = settings.OLLAMA_MODEL
-        elif provider == "custom":
-            # 未显式传模型时回退到 .env 中保存的自定义模型名，
-            # 否则保存过的 CUSTOM_API_MODEL 是死配置（如健康检查不带 model 时会直接报未配置）
-            chosen_model = settings.CUSTOM_API_MODEL
+        elif config.get("custom"):
+            chosen_model = config["default_model"]
         else:
             chosen_model = config["default_model"]
 
         override_key = (api_key or "").strip()
         override_url = (base_url or "").strip()
-        if provider == "custom":
-            effective_url = normalize_base_url(override_url or settings.CUSTOM_API_BASE_URL)
-            effective_key = override_key or settings.CUSTOM_API_KEY or "local"
+        if config.get("custom"):
+            from utils.custom_providers import get_api_key
+            protocol = config["protocol"]
+            effective_url = override_url or config["base_url"]
+            if protocol == "openai":
+                effective_url = normalize_base_url(effective_url)
+            else:
+                effective_url = effective_url.strip().rstrip("/")
+                if protocol == "anthropic":
+                    for suffix in ("/v1/messages", "/messages", "/v1"):
+                        if effective_url.endswith(suffix):
+                            effective_url = effective_url[:-len(suffix)].rstrip("/")
+                            break
+                if protocol == "gemini":
+                    effective_url = re.sub(r"/v1beta(?:/.*)?$", "", effective_url)
+            effective_key = override_key or get_api_key(config["service_id"]) or "local"
             if not effective_url:
                 raise ValueError(
-                    "自定义 API 未配置 Base URL。请在侧边栏选择「自定义 API」后填写。"
+                    "自定义 API 未配置 Base URL，请前往设置页补全。"
                 )
             if not chosen_model:
                 raise ValueError(
-                    "自定义 API 未配置模型名。请在侧边栏「模型」处填写。"
+                    "自定义服务尚未配置模型名，请在设置页添加至少一个模型。"
                 )
         elif is_local:
             effective_url = normalize_base_url(
@@ -104,21 +138,24 @@ class LLMFactory:
             effective_key = override_key or getattr(settings, config["env_key"]) or "local"
 
         key = (provider, chosen_model)
-        cacheable = bool(chosen_model) and provider != "custom" and not (override_key or override_url)
+        cacheable = bool(chosen_model) and not config.get("custom") and not (override_key or override_url)
         cached = _llm_cache.get(key) if cacheable else None
         if cached and cached.base_url == effective_url and cached.api_key == effective_key:
             return cached
 
-        # 延迟导入，避免首屏加载 openai（约 2.4s）
-        from llm.openai_llm import OpenAICompatibleLLM
-
-        llm = OpenAICompatibleLLM(
-            api_key=effective_key,
-            base_url=effective_url,
-            model=chosen_model,
-            provider=provider,
-            is_local=is_local,
-        )
+        if config.get("custom") and config["protocol"] != "openai":
+            from llm.protocol_llm import CustomProtocolLLM
+            llm = CustomProtocolLLM(
+                protocol=config["protocol"], api_key=effective_key,
+                base_url=effective_url, model=chosen_model, provider=provider,
+            )
+        else:
+            # 延迟导入，避免首屏加载 openai（约 2.4s）
+            from llm.openai_llm import OpenAICompatibleLLM
+            llm = OpenAICompatibleLLM(
+                api_key=effective_key, base_url=effective_url, model=chosen_model,
+                provider=provider, is_local=is_local,
+            )
 
         if cacheable:
             _llm_cache[key] = llm
@@ -141,6 +178,8 @@ class LLMFactory:
 
         config = get_provider_config(provider)
         is_dynamic = config.get("dynamic_models") or provider == "ollama"
+        if config.get("custom"):
+            return list(config.get("models", []))
 
         if is_dynamic:
             # LM Studio：查询当前已加载模型；Ollama：查询本地已安装模型

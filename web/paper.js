@@ -375,6 +375,10 @@ async function initPaperPage() {
   $("btn-paper-export").addEventListener("click", () => pwExport("docx"));
   $("btn-paper-export-pdf").addEventListener("click", () => pwExport("pdf"));
   $("btn-paper-ask").addEventListener("click", () => pwAsk().catch(pwError));
+  $("paper-ask-answer").addEventListener("click", (e) => {
+    const source = e.target.closest("[data-ask-basis]");
+    if (source) pwAskOpenBasis(source.dataset.askBasis).catch(pwError);
+  });
   $("paper-ask-input").addEventListener("keydown", (e) => {
     if (e.key === "Enter") pwAsk().catch(pwError);
   });
@@ -1088,6 +1092,7 @@ function pwRenderIssues(dims) {
 async function pwGotoParagraph(pid) {
   await pwLoadParagraphs();
   await pwSelectParagraph(pid);
+  if (!paperState.selected || paperState.selected.id !== pid) return;
   pwSetStep(5, true);
 }
 
@@ -2108,6 +2113,22 @@ function pwAskOpen(open) {
   }
 }
 
+function pwRenderAskBasis(basis) {
+  const sources = [...new Set((basis || []).map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!sources.length) return "";
+  return `<div class="ask-basis"><span>依据</span>${sources.map((id) =>
+    `<button type="button" class="chip basis-source-link" data-ask-basis="${esc(id)}" aria-label="查看原文段落 ${esc(id)}" title="查看原文段落">${esc(id)}</button>`
+  ).join("")}</div>`;
+}
+
+async function pwAskOpenBasis(paragraphId) {
+  if (!paperState.paperId || !paragraphId) return;
+  pwAskOpen(true);
+  await pwGotoParagraph(paragraphId);
+  if (!paperState.selected || paperState.selected.id !== paragraphId) return;
+  $("paper-original").scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
 async function pwAsk() {
   if (!paperState.paperId) {
     pwAlert("请先上传论文，再围绕该论文提问。", "warn");
@@ -2126,9 +2147,7 @@ async function pwAsk() {
     if (r.rejected) {
       $("paper-ask-answer").innerHTML = `<p class="muted">${esc(r.answer)}</p>`;
     } else {
-      const basis = (r.basis || []).length
-        ? `<div class="ask-basis">依据：${(r.basis || []).map((b) => `<span class="chip">${esc(b)}</span>`).join("")}</div>`
-        : "";
+      const basis = pwRenderAskBasis(r.basis);
       $("paper-ask-answer").innerHTML = `<div class="markdown">${renderMarkdown(r.answer)}</div>${basis}`;
       $("paper-ask-input").value = "";
       pwRefreshQuota();

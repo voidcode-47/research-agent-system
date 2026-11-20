@@ -1,5 +1,6 @@
 """四维诊断：层次 / 内容可实现性 / 正文格式 / 去 AI 味（含 AI 生成率）。"""
 import datetime
+import hashlib
 import json
 
 from config.paper import DIAGNOSIS_DIMENSIONS, PAPER_LEVELS
@@ -129,6 +130,20 @@ def _paper_context(parsed: dict, max_chars: int = 6000) -> str:
     return "\n".join(lines)
 
 
+def _score_trace(parsed: dict, requirement: dict, source: str) -> dict:
+    """Expose enough provenance to distinguish input drift from model drift."""
+    payload = {
+        "parsed": parsed,
+        "requirement": requirement,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":"), default=str).encode("utf-8")
+    return {
+        "score_source": source,
+        "input_fingerprint": hashlib.sha256(encoded).hexdigest()[:16],
+    }
+
+
 def _text_stats(parsed: dict) -> str:
     body = [p for p in parsed.get("paragraphs") or [] if p.get("type") == "body"]
     chars = sum(len(p.get("text") or "") for p in body)
@@ -160,6 +175,7 @@ def _diagnose_level(gateway: LLMGateway, parsed: dict, requirement: dict,
         "level_diagnose",
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         paper_id=paper_id,
+        temperature=0,
         validator=_has_score,
     )
     return {
@@ -171,6 +187,7 @@ def _diagnose_level(gateway: LLMGateway, parsed: dict, requirement: dict,
         "target_label": conf["label"],
         "stale": False,
         "generated_at": _now(),
+        **_score_trace(parsed, requirement, "llm:temperature=0"),
     }
 
 
@@ -187,6 +204,7 @@ def _diagnose_feasibility(gateway: LLMGateway, parsed: dict, requirement: dict,
         "feasibility",
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         paper_id=paper_id,
+        temperature=0,
         validator=_has_score,
     )
     return {
@@ -199,6 +217,7 @@ def _diagnose_feasibility(gateway: LLMGateway, parsed: dict, requirement: dict,
         "disclaimer": str(data.get("disclaimer") or "评估仅供参考，不代表评审结论"),
         "stale": False,
         "generated_at": _now(),
+        **_score_trace(parsed, requirement, "llm:temperature=0"),
     }
 
 
@@ -262,6 +281,7 @@ def _diagnose_format(gateway: LLMGateway, parsed: dict, requirement: dict,
         "llm_error": llm_error,
         "stale": False,
         "generated_at": _now(),
+        **_score_trace(parsed, requirement, "rules:format_rules"),
     }
 
 
@@ -442,6 +462,7 @@ def _diagnose_deai(gateway: LLMGateway, parsed: dict, requirement: dict,
         "llm_error": llm_error,
         "stale": False,
         "generated_at": _now(),
+        **_score_trace(parsed, requirement, "rules:deai_detector"),
     }
 
 

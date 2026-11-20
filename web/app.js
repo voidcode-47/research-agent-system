@@ -116,7 +116,7 @@ document.getElementById("nav").addEventListener("click", (e) => {
 });
 
 // ---------- 状态 ----------
-let providersInfo = null; // {providers, labels, current_provider, current_model, custom_api}
+let providersInfo = null;
 let authInfo = { authenticated: false, username: "", role: "user", unlimited: false, can_manage_models: false };
 
 function isAdmin() {
@@ -136,6 +136,9 @@ function renderAuth() {
     btn.textContent = "管理员登录";
   }
   $("btn-test").classList.toggle("hidden", !isAdmin());
+  $("admin-password-card").classList.toggle("hidden", !isAdmin());
+  $("active-model-form").classList.toggle("hidden", !isAdmin());
+  $("provider-config-list").classList.toggle("hidden", !isAdmin());
 }
 
 async function loadAuth() {
@@ -191,6 +194,28 @@ $("login-form").addEventListener("submit", async (e) => {
     $("login-error").textContent = `登录失败：${err.message}`;
   } finally {
     btn.disabled = false;
+  }
+});
+
+$("change-password-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const status = $("password-status");
+  const current = $("password-current").value;
+  const next = $("password-new").value;
+  if (next !== $("password-confirm").value) {
+    status.textContent = "❌ 两次输入的新密码不一致";
+    return;
+  }
+  const button = $("btn-change-password");
+  button.disabled = true;
+  try {
+    await postJSON("/api/auth/password", { current_password: current, new_password: next });
+    $("change-password-form").reset();
+    status.textContent = "✅ 密码已更新";
+  } catch (err) {
+    status.textContent = "❌ " + err.message;
+  } finally {
+    button.disabled = false;
   }
 });
 
@@ -253,6 +278,8 @@ function setConn(text, kind) {
 let researchPoll = null;
 let researchTaskId = null;
 let currentReport = null; // {name, text}
+let previewedReportName = "";
+let reportPreviewRequest = 0;
 let lastRefsKey = "";
 
 $("results").addEventListener("input", () => ($("v-results").textContent = $("results").value));
@@ -422,9 +449,9 @@ function showReport(text, name) {
   $("research-result").scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function downloadReport(format) {
-  if (!currentReport || !currentReport.name) return;
-  const url = `/api/reports/${encodeURIComponent(currentReport.name)}${format === "docx" ? "?format=docx" : ""}`;
+function downloadReportFile(name, format) {
+  if (!name) return;
+  const url = `/api/reports/${encodeURIComponent(name)}${format === "docx" ? "?format=docx" : ""}`;
   const a = document.createElement("a");
   a.href = url;
   a.download = "";
@@ -432,8 +459,53 @@ function downloadReport(format) {
   a.click();
   a.remove();
 }
+function downloadReport(format) {
+  if (currentReport) downloadReportFile(currentReport.name, format);
+}
 $("btn-dl-md").addEventListener("click", () => downloadReport("md"));
 $("btn-dl-docx").addEventListener("click", () => downloadReport("docx"));
+$("btn-report-preview-md").addEventListener("click", () => downloadReportFile(previewedReportName, "md"));
+$("btn-report-preview-docx").addEventListener("click", () => downloadReportFile(previewedReportName, "docx"));
+$("btn-close-report-preview").addEventListener("click", () => $("report-preview-dialog").close());
+$("report-preview-dialog").addEventListener("close", () => {
+  reportPreviewRequest += 1;
+  previewedReportName = "";
+});
+$("report-preview-dialog").addEventListener("click", (e) => {
+  if (e.target === $("report-preview-dialog")) $("report-preview-dialog").close();
+});
+
+async function previewReport(name) {
+  const dialog = $("report-preview-dialog");
+  const title = $("report-preview-title");
+  const status = $("report-preview-status");
+  const body = $("report-preview-body");
+  const requestId = ++reportPreviewRequest;
+  previewedReportName = "";
+  title.textContent = name;
+  status.textContent = "正在加载报告…";
+  body.innerHTML = "";
+  $("btn-report-preview-md").disabled = true;
+  $("btn-report-preview-docx").disabled = true;
+  if (!dialog.open) dialog.showModal();
+  try {
+    const response = await fetch(`/api/reports/${encodeURIComponent(name)}`);
+    if (!response.ok) {
+      let detail = "";
+      try { detail = (await response.json()).detail || ""; } catch (e) {}
+      throw new Error(detail || `HTTP ${response.status}`);
+    }
+    const text = await response.text();
+    if (requestId !== reportPreviewRequest) return;
+    body.innerHTML = renderMarkdown(text);
+    previewedReportName = name;
+    status.textContent = "";
+    $("btn-report-preview-md").disabled = false;
+    $("btn-report-preview-docx").disabled = false;
+  } catch (e) {
+    if (requestId === reportPreviewRequest) status.textContent = `预览失败：${e.message}`;
+  }
+}
 
 $("btn-copy").addEventListener("click", async () => {
   if (!currentReport) return;
@@ -504,6 +576,7 @@ async function loadReports() {
       row.className = "rep-row";
       row.innerHTML = `
         <span class="rep-name" title="${esc(r.name)}">${esc(r.name)}</span>
+        <button class="btn btn-ghost" data-act="preview" data-name="${esc(r.name)}">预览</button>
         <button class="btn btn-ghost" data-act="dl" data-name="${esc(r.name)}">下载</button>
         <button class="btn btn-ghost" data-act="del" data-name="${esc(r.name)}">🗑️</button>`;
       el.appendChild(row);
@@ -517,7 +590,9 @@ $("report-list").addEventListener("click", async (e) => {
   const btn = e.target.closest("button[data-act]");
   if (!btn) return;
   const name = btn.dataset.name;
-  if (btn.dataset.act === "dl") {
+  if (btn.dataset.act === "preview") {
+    await previewReport(name);
+  } else if (btn.dataset.act === "dl") {
     const a = document.createElement("a");
     a.href = `/api/reports/${encodeURIComponent(name)}`;
     a.download = "";
@@ -542,12 +617,6 @@ function updateSettingsTable() {
   $("btn-save-research-settings").disabled = !admin;
   $("set-results").disabled = !admin;
   $("set-style").disabled = !admin;
-  const cus = providersInfo.custom_api;
-  $("set-custom").textContent = admin
-    ? (cus && cus.base_url
-      ? `${cus.base_url} / ${cus.api_key ? "已填 Key" : "未填 Key"}`
-      : "未配置")
-    : "仅管理员可见";
   // 调研默认参数回填
   const rp = providersInfo.research_prefs || {};
   if (rp.max_results) { $("set-results").value = Math.min(10, Math.max(5, rp.max_results)); $("set-v-results").textContent = $("set-results").value; }
@@ -580,100 +649,272 @@ function applyResearchDefaults() {
   if (rp.detailed !== undefined) $("report-style").value = rp.detailed ? "detailed" : "standard";
 }
 
-// ---------- 设置页：模型提供商（Key / Base URL 集中配置） ----------
-const PROVIDER_ORDER = ["deepseek", "zhipu", "qwen", "custom", "ollama", "lmstudio"];
+// ---------- 设置页：模型服务 ----------
+const PROVIDER_PRESETS = {
+  deepseek: { name: "DeepSeek", url: "https://api.deepseek.com/v1" },
+  zhipu: { name: "智谱 GLM", url: "https://open.bigmodel.cn/api/paas/v4" },
+  qwen: { name: "通义千问", url: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+};
+const PROTOCOL_LABELS = { openai: "OpenAI 兼容", anthropic: "Anthropic Messages", gemini: "Gemini" };
+let editingServiceId = null;
 
 function keyTag(has) {
   return has ? '<span class="tag-ok">已配置</span>' : '<span class="tag-missing">未配置</span>';
 }
 
 function renderProviderConfig() {
-  if (!providersInfo) return;
-  const wrap = $("provider-config-list");
-  wrap.innerHTML = "";
-  if (!isAdmin()) {
-    const { provider, model } = currentProviderModel();
-    const label = providersInfo.labels?.[provider] || provider || "未设置";
-    wrap.innerHTML = `
-      <div class="prov-item prov-readonly">
-        <div class="prov-head"><span class="prov-name">${esc(label)}</span><span class="tag-ok">当前生效</span></div>
-        <div class="readonly-model">${esc(model || "默认模型")}</div>
-        <div class="hint-line">模型由管理员统一配置；普通用户不能新增、修改或切换模型。</div>
-      </div>`;
+  const customList = $("custom-provider-list");
+  const localList = $("local-provider-list");
+  const serviceSelect = $("active-provider");
+  if (!isAdmin() || providersInfo.read_only) {
+    customList.replaceChildren();
+    localList.replaceChildren();
+    serviceSelect.replaceChildren();
+    $("active-model").replaceChildren();
     return;
   }
-  for (const p of PROVIDER_ORDER) {
-    const label = providersInfo.labels[p] || p;
-    const card = document.createElement("div");
-    card.className = "prov-item";
-    let fields = "";
-    if (providersInfo.cloud?.[p]) {
-      const c = providersInfo.cloud[p];
-      fields = `
-        <label class="lbl">API Key ${keyTag(c.has_key)}</label>
-        <input type="password" class="input" id="pk-${p}" placeholder="${c.has_key ? "已保存，填新值可替换" : "sk-..."}" autocomplete="off">
-        <label class="lbl">Base URL</label>
-        <input type="text" class="input" id="pu-${p}" value="${esc(c.base_url || "")}" spellcheck="false" autocomplete="off">`;
-    } else if (p === "custom") {
-      const c = providersInfo.custom_api || {};
-      fields = `
-        <label class="lbl">Base URL</label>
-        <input type="text" class="input" id="pu-${p}" value="${esc(c.base_url || "")}" placeholder="https://api.example.com/v1" spellcheck="false" autocomplete="off">
-        <label class="lbl">API Key ${keyTag(c.api_key)}</label>
-        <input type="password" class="input" id="pk-${p}" placeholder="${c.api_key ? "已保存，填新值可替换" : "sk-..."}" autocomplete="off">
-        <label class="lbl">默认模型名</label>
-        <input type="text" class="input" id="pm-${p}" value="${esc(c.model || "")}" placeholder="模型 ID" spellcheck="false" autocomplete="off">`;
-    } else {
-      const u = (providersInfo.local_api || {})[p] || "";
-      fields = `
-        <label class="lbl">Base URL</label>
-        <input type="text" class="input" id="pu-${p}" value="${esc(u)}" spellcheck="false" autocomplete="off">
-        <div class="hint-line">本地服务，无需 API Key</div>`;
-    }
-    card.innerHTML =
-      `<div class="prov-head"><span class="prov-name">${esc(label)}</span>` +
-      `<button class="btn" data-prov="${p}">保存</button></div>` +
-      fields +
-      `<div class="hint-line" id="ps-${p}"></div>`;
-    wrap.appendChild(card);
+  const { provider, model } = currentProviderModel();
+  const services = providersInfo.custom_services || [];
+  customList.innerHTML = services.map((service) => {
+    const { id, name, protocol, models, default_model, has_api_key } = service;
+    const active = provider === `custom:${id}`;
+    const modelList = models.map((m) => `
+      <li><code>${esc(m)}</code>${m === default_model ? '<span class="muted">默认</span>' : ""}</li>`).join("");
+    return `
+      <div class="custom-service-row">
+        <div class="prov-head">
+          <div class="provider-description">
+            <span class="prov-name">${esc(name)}</span>
+            ${active ? '<span class="tag-ok">使用中</span>' : ""}
+            <p class="hint-line">${esc(PROTOCOL_LABELS[protocol] || protocol)} · ${models.length} 个模型
+              · API Key${keyTag(has_api_key)}</p>
+          </div>
+          <div class="provider-actions">
+            <button type="button" class="btn" data-service-action="edit" data-service-id="${esc(id)}">编辑</button>
+            <button type="button" class="btn btn-ghost" data-service-action="delete" data-service-id="${esc(id)}">删除</button>
+          </div>
+        </div>
+        ${modelList ? `<ul class="service-models">${modelList}</ul>` : '<p class="muted">未添加模型</p>'}
+      </div>`;
+  }).join("") || '<p class="muted">还没有自定义服务</p>';
+
+  localList.innerHTML = Object.entries(providersInfo.local_api || {}).map(([p, url]) => `
+    <form class="prov-item" data-local-provider="${esc(p)}">
+      <div class="prov-head"><span class="prov-name">${esc(providersInfo.labels[p] || p)}</span>
+        <button type="submit" class="btn">保存地址</button></div>
+      <label class="lbl" for="pu-${esc(p)}">Base URL</label>
+      <input type="url" class="input" id="pu-${esc(p)}" value="${esc(url)}" spellcheck="false" required>
+      <p class="hint-line" id="ps-${esc(p)}" role="status"></p>
+    </form>`).join("");
+
+  const selectable = providersInfo.providers.filter((p) => {
+    const service = services.find((item) => p === `custom:${item.id}`);
+    return !service || service.models.length;
+  });
+  serviceSelect.replaceChildren(...selectable.map((p) => new Option(providersInfo.labels[p] || p, p)));
+  if (selectable.includes(provider)) serviceSelect.value = provider;
+  renderActiveModels(serviceSelect.value, serviceSelect.value === provider ? model : "");
+}
+
+function renderActiveModels(provider, current = "") {
+  const service = (providersInfo.custom_services || []).find((item) => provider === `custom:${item.id}`);
+  const select = $("active-model");
+  const input = $("active-local-model");
+  const local = !service;
+  select.classList.toggle("hidden", local);
+  input.classList.toggle("hidden", !local);
+  $("active-model-label").htmlFor = local ? input.id : select.id;
+  if (local) {
+    select.replaceChildren();
+    input.value = current;
+  } else {
+    select.replaceChildren(...service.models.map((model) => new Option(model, model)));
+    select.value = service.models.includes(current) ? current : service.default_model;
   }
 }
 
-$("provider-config-list").addEventListener("click", async (e) => {
-  const btn = e.target.closest("button[data-prov]");
-  if (!btn) return;
-  const p = btn.dataset.prov;
-  const status = $("ps-" + p);
-  const key = $("pk-" + p)?.value.trim();
-  const url = $("pu-" + p)?.value.trim();
-  const model = $("pm-" + p)?.value.trim();
-  const payload = { provider: p };
+$("active-provider").addEventListener("change", (e) => {
+  const active = currentProviderModel();
+  renderActiveModels(e.target.value, e.target.value === active.provider ? active.model : "");
+  $("active-model-status").textContent = "";
+});
+
+$("active-model-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!isAdmin()) return;
+  const provider = $("active-provider").value;
+  const model = provider.startsWith("custom:") ? $("active-model").value : $("active-local-model").value.trim();
+  const button = $("btn-use-model");
+  const status = $("active-model-status");
+  button.disabled = true;
   try {
-    if (providersInfo.cloud?.[p]) {
-      if (key) payload.cloud_api_key = key;
-      if (url) payload.cloud_base_url = url;
-      if (!payload.cloud_api_key && !payload.cloud_base_url) {
-        status.textContent = "没有需要保存的修改";
-        return;
-      }
-    } else if (p === "custom") {
-      if (url) payload.custom_base_url = url;
-      if (key) payload.custom_api_key = key;
-      if (model !== undefined) payload.custom_model = model;
-    } else {
-      if (!url) { status.textContent = "没有需要保存的修改"; return; }
-      payload[p + "_base_url"] = url; // ollama_base_url / lmstudio_base_url
-    }
-    btn.disabled = true;
-    await postJSON("/api/settings", payload);
-    if ($("pk-" + p)) $("pk-" + p).value = ""; // Key 不回显，保存后清空输入框
+    await postJSON("/api/settings", { provider, model });
     await loadProviders();
-    status.textContent = "✅ 已保存";
-    setTimeout(() => { if (status.textContent === "✅ 已保存") status.textContent = ""; }, 2500);
+    status.textContent = "当前模型已更新";
   } catch (err) {
-    status.textContent = `❌ ${err.message}`;
+    status.textContent = `切换失败：${err.message}`;
   } finally {
-    btn.disabled = false;
+    button.disabled = false;
+  }
+});
+
+function addServiceModel(model = "", selected = false) {
+  const row = document.createElement("div");
+  row.className = "service-model-row";
+  row.innerHTML = `
+    <input class="input" type="text" aria-label="模型 ID" placeholder="模型 ID" value="${esc(model)}" spellcheck="false" required>
+    <label><input type="radio" name="service-default-model"${selected ? " checked" : ""}> 默认</label>
+    <button class="btn btn-ghost" type="button" data-remove-model aria-label="移除模型" title="移除模型">×</button>`;
+  $("custom-provider-models").appendChild(row);
+  return row.querySelector(".input");
+}
+
+function openCustomProvider(service = null) {
+  if (!isAdmin()) return;
+  editingServiceId = service?.id ?? null;
+  $("custom-provider-title").textContent = service ? "编辑自定义服务" : "新增自定义服务";
+  $("custom-provider-preset-field").classList.toggle("hidden", !!service);
+  $("custom-provider-preset").replaceChildren(
+    new Option("手动配置", ""),
+    ...Object.entries(PROVIDER_PRESETS).map(([id, preset]) => new Option(preset.name, id)),
+  );
+  $("custom-provider-name").value = service?.name || "";
+  $("custom-provider-protocol").value = service?.protocol || "openai";
+  $("custom-provider-url").value = service?.base_url || "";
+  const key = $("custom-provider-key");
+  key.value = "";
+  key.placeholder = service?.has_api_key ? "已保存，留空保留原密钥" : "输入服务的 API Key（如需）";
+  $("custom-provider-key-status").innerHTML = service ? keyTag(service.has_api_key) : "";
+  $("custom-provider-error").textContent = "";
+  const list = $("custom-provider-models");
+  list.replaceChildren();
+  const models = service?.models?.length ? service.models : [""];
+  const defaultModel = models.includes(service?.default_model) ? service.default_model : models[0];
+  for (const model of models) addServiceModel(model, model === defaultModel);
+  $("custom-provider-dialog").showModal();
+}
+
+$("btn-add-custom-provider").addEventListener("click", () => openCustomProvider());
+
+$("custom-provider-preset").addEventListener("change", (e) => {
+  const preset = PROVIDER_PRESETS[e.target.value];
+  if (!preset) return;
+  $("custom-provider-name").value = preset.name;
+  $("custom-provider-protocol").value = "openai";
+  $("custom-provider-url").value = preset.url;
+  $("custom-provider-key").value = "";
+});
+
+$("btn-add-service-model").addEventListener("click", () => addServiceModel().focus());
+$("custom-provider-models").addEventListener("click", (e) => {
+  const button = e.target.closest("[data-remove-model]");
+  if (!button) return;
+  const list = $("custom-provider-models");
+  if (list.children.length === 1) {
+    $("custom-provider-error").textContent = "请至少保留一个模型";
+    return;
+  }
+  button.closest(".service-model-row").remove();
+  if (!list.querySelector('input[type="radio"]:checked')) list.querySelector('input[type="radio"]').checked = true;
+  $("custom-provider-error").textContent = "";
+});
+
+const providerDialog = $("custom-provider-dialog");
+$("btn-cancel-custom-provider").addEventListener("click", () => providerDialog.close());
+providerDialog.addEventListener("cancel", (e) => {
+  if ($("custom-provider-fields").disabled) e.preventDefault();
+});
+providerDialog.addEventListener("close", () => { $("custom-provider-key").value = ""; });
+
+$("custom-provider-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!isAdmin()) return;
+  const rows = [...$("custom-provider-models").children];
+  const models = rows.map((row) => row.querySelector(".input").value.trim());
+  const error = $("custom-provider-error");
+  if (models.some((model) => !model)) {
+    error.textContent = "请填写每一行的模型 ID，或移除空白行";
+    return;
+  }
+  if (new Set(models).size !== models.length) {
+    error.textContent = "模型 ID 重复，请移除重复项";
+    return;
+  }
+  const defaultIndex = rows.findIndex((row) => row.querySelector('input[type="radio"]').checked);
+  const body = {
+    name: $("custom-provider-name").value.trim(),
+    protocol: $("custom-provider-protocol").value,
+    base_url: $("custom-provider-url").value.trim(),
+    api_key: $("custom-provider-key").value.trim(),
+    models,
+    default_model: models[defaultIndex] || models[0],
+  };
+  const id = editingServiceId;
+  const fields = $("custom-provider-fields");
+  const status = $("custom-provider-status");
+  fields.disabled = true;
+  error.textContent = "";
+  try {
+    if (id) {
+      await api(`/api/custom-providers/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      await postJSON("/api/custom-providers", body);
+    }
+  } catch (err) {
+    error.textContent = `保存失败：${err.message}`;
+    return;
+  } finally {
+    fields.disabled = false;
+  }
+  providerDialog.close();
+  status.textContent = "服务已保存";
+  try { await loadProviders(); }
+  catch (err) { status.textContent = `已保存，但刷新失败：${err.message}`; }
+});
+
+$("custom-provider-list").addEventListener("click", async (e) => {
+  const button = e.target.closest("[data-service-action]");
+  if (!button || !isAdmin()) return;
+  const service = providersInfo.custom_services.find((item) => item.id === button.dataset.serviceId);
+  if (!service) return;
+  if (button.dataset.serviceAction === "edit") {
+    openCustomProvider(service);
+    return;
+  }
+  const active = currentProviderModel().provider === `custom:${service.id}`;
+  const note = active ? "删除后将自动切换到其他服务。" : "";
+  if (!confirm("删除「" + service.name + "」及其模型列表？" + note)) return;
+  button.disabled = true;
+  const status = $("custom-provider-status");
+  try {
+    await api(`/api/custom-providers/${encodeURIComponent(service.id)}`, { method: "DELETE" });
+    await loadProviders();
+    status.textContent = "服务已删除";
+  } catch (err) {
+    status.textContent = `删除失败：${err.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("local-provider-list").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!isAdmin()) return;
+  const p = e.target.dataset.localProvider;
+  const button = e.target.querySelector("button");
+  button.disabled = true;
+  try {
+    await postJSON("/api/settings", { [`${p}_base_url`]: $(`pu-${p}`).value.trim() });
+    await loadProviders();
+    $(`ps-${p}`).textContent = "地址已保存";
+  } catch (err) {
+    $(`ps-${p}`).textContent = `保存失败：${err.message}`;
+  } finally {
+    button.disabled = false;
   }
 });
 

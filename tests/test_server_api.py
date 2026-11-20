@@ -7,6 +7,7 @@ import pytest
 import server
 from fastapi.testclient import TestClient
 from utils import auth, prefs
+from utils import custom_providers
 
 client = TestClient(server.app)
 
@@ -16,6 +17,9 @@ def _admin_session(tmp_path, monkeypatch):
     """设置类接口仅管理员可用；这里直接注入管理员会话。"""
     monkeypatch.setattr(auth, "ADMIN_PATH", str(tmp_path / "admin.json"))
     monkeypatch.setattr(prefs, "PREFS_PATH", str(tmp_path / "ui_prefs.json"))
+    monkeypatch.setattr(custom_providers, "CUSTOM_PROVIDERS_PATH", str(tmp_path / "custom_providers.json"))
+    monkeypatch.setattr(custom_providers, "ENV_PATH", str(tmp_path / ".env"))
+    monkeypatch.setattr(server.settings, "CUSTOM_API_BASE_URL", "")
     auth.reset_state()
     client.cookies.set(auth.COOKIE_NAME, auth.create_session("admin"))
     yield
@@ -60,15 +64,14 @@ def test_providers():
     r = client.get("/api/providers")
     assert r.status_code == 200
     data = r.json()
-    assert "deepseek" in data["providers"]
-    assert "custom" in data["providers"]
+    assert data["providers"] == ["ollama", "lmstudio"]
     assert "labels" in data
 
 
 def test_models_known_provider():
-    r = client.get("/api/models?provider=deepseek")
+    r = client.get("/api/models?provider=ollama")
     assert r.status_code == 200
-    assert "deepseek-chat" in r.json()["models"]
+    assert "qwen2.5:7b" in r.json()["models"]
 
 
 def test_models_unknown_provider():
@@ -181,10 +184,10 @@ def test_settings_save_and_read(tmp_path, monkeypatch):
     import server as srv
     monkeypatch.setattr(server, "update_env", lambda d, path=None: None)
     monkeypatch.setattr(srv, "save_prefs", lambda p, m, cm=None: None)
-    monkeypatch.setattr(srv, "load_prefs", lambda: {"provider": "deepseek", "model": "m", "custom_models": {}})
-    r = client.post("/api/settings", json={"provider": "deepseek", "model": "deepseek-chat"})
+    monkeypatch.setattr(srv, "load_prefs", lambda: {"provider": "ollama", "model": "m", "custom_models": {}})
+    r = client.post("/api/settings", json={"provider": "ollama", "model": "qwen2.5:7b"})
     assert r.status_code == 200
-    assert r.json()["model"] == "deepseek-chat"
+    assert r.json()["model"] == "qwen2.5:7b"
 
 
 # ---------- 任务表维护 ----------
@@ -220,7 +223,7 @@ def test_settings_local_base_url_saves(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(server, "update_env", lambda d, path=None: calls.append(dict(d)))
     monkeypatch.setattr(server.settings, "OLLAMA_BASE_URL", "")
-    r = client.post("/api/settings", json={"provider": "deepseek",
+    r = client.post("/api/settings", json={"provider": "ollama",
                                            "ollama_base_url": "http://127.0.0.1:11434/"})
     assert r.status_code == 200
     assert calls and calls[0]["OLLAMA_BASE_URL"] == "http://127.0.0.1:11434"

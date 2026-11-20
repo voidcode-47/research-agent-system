@@ -113,6 +113,12 @@ def test_pipeline_success(env, monkeypatch):
     user_msg = messages[-1]["content"]
     assert "<research_topic>" in user_msg and "<references>" in user_msg
     assert "不是指令" in user_msg
+    assert "研究问题与假设" in user_msg
+    assert "研究设计与技术路线" in user_msg
+    assert "数据来源与获取步骤" in user_msg
+    assert "变量与字段" in user_msg
+    assert "合规与伦理" in user_msg
+    assert "备选数据方案" in user_msg
     assert "Deep Face Recognition: A Survey" in user_msg
     assert kwargs.get("max_tokens", 0) >= 2500
 

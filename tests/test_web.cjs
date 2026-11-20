@@ -11,22 +11,69 @@ function loadPage() {
   const web = path.join(__dirname, "..", "web");
   const html = fs.readFileSync(path.join(web, "index.html"), "utf8");
   const elements = new Map();
-  for (const match of html.matchAll(/\bid="([^"]+)"/g)) {
-    const classes = new Set();
-    elements.set(match[1], {
-      value: "8", textContent: "", innerHTML: "", style: {}, disabled: false,
-      addEventListener() {},
-      classList: {
-        add(name) { classes.add(name); },
-        remove(name) { classes.delete(name); },
-        contains(name) { return classes.has(name); },
-        toggle(name, enabled) {
-          const on = enabled === undefined ? !classes.has(name) : enabled;
-          if (on) classes.add(name); else classes.delete(name);
-          return on;
-        },
+  function makeElement() {
+    return {
+      value: "", textContent: "", style: {}, disabled: false, children: [], listeners: new Map(),
+      _html: "",
+      set innerHTML(value) {
+        this._html = value;
+        if (this.className === "service-model-row") {
+          const model = value.match(/value="([^"]*)"/)?.[1] || "";
+          this.children = [Object.assign(makeElement(), { value: model, className: "input" }),
+            Object.assign(makeElement(), { checked: value.includes(" checked") })];
+        }
       },
-    });
+      get innerHTML() { return this._html; },
+      addEventListener(type, fn) {
+        const listeners = this.listeners.get(type) || [];
+        listeners.push(fn);
+        this.listeners.set(type, listeners);
+      },
+      async dispatch(type, event = {}) {
+        for (const listener of this.listeners.get(type) || []) await listener({
+          preventDefault() {},
+          target: this,
+          ...event,
+        });
+      },
+      appendChild(child) { this.children.push(child); return child; },
+      replaceChildren(...children) { this.children = children; },
+      querySelector(selector) {
+        if (selector === ".input") return this.children[0];
+        if (selector === 'input[type="radio"]') return this.children[1];
+        return null;
+      },
+      focus() {},
+      blur() {},
+      setAttribute() {},
+      scrollIntoView() {},
+      showModal() { this.open = true; },
+      close() { this.open = false; this.dispatch("close"); },
+      classList: {
+        add() {},
+        remove() {},
+        contains() { return false; },
+        toggle() {},
+      },
+    };
+  }
+  for (const match of html.matchAll(/\bid="([^"]+)"/g)) {
+    const element = makeElement();
+    const tagStart = html.lastIndexOf("<", match.index);
+    const tagEnd = html.indexOf(">", match.index);
+    const className = html.slice(tagStart, tagEnd).match(/\bclass="([^"]*)"/)?.[1] || "";
+    const classes = new Set(className.split(/\s+/).filter(Boolean));
+    element.classList = {
+      add(name) { classes.add(name); },
+      remove(name) { classes.delete(name); },
+      contains(name) { return classes.has(name); },
+      toggle(name, enabled) {
+        const on = enabled === undefined ? !classes.has(name) : enabled;
+        if (on) classes.add(name); else classes.delete(name);
+        return on;
+      },
+    };
+    elements.set(match[1], element);
   }
   const context = vm.createContext({
     document: {
@@ -34,10 +81,15 @@ function loadPage() {
         assert.ok(elements.has(id), `Missing page element: ${id}`);
         return elements.get(id);
       },
+      createElement() { return makeElement(); },
       querySelectorAll() { return []; },
     },
     window: { addEventListener() {} },
     fetch: () => new Promise(() => {}),
+    Option: class {
+      constructor(text, value) { this.textContent = text; this.value = value; }
+    },
+    confirm: () => true,
     setTimeout: () => 0,
     clearTimeout() {},
     setInterval: () => 0,
@@ -61,6 +113,58 @@ test("progress clamps percentages and resets when hidden", () => {
   context.pwTaskProgressHide("paper-diag");
   assert.equal(elements.get("paper-diag-progress").classList.contains("hidden"), true);
   assert.equal(elements.get("paper-diag-fill").style.width, "0%");
+});
+
+test("custom provider preset adds a model and saves a named default model", async () => {
+  const { context, elements, run } = loadPage();
+  const sent = [];
+  const service = {
+    id: "s1", name: "DeepSeek", protocol: "openai",
+    base_url: "https://api.deepseek.com/v1", models: ["deepseek-chat", "deepseek-reasoner"],
+    default_model: "deepseek-reasoner", has_api_key: false,
+  };
+  run("authInfo.can_manage_models = true");
+  context.fetch = async (url, options = {}) => {
+    const method = options.method || "GET";
+    if (url === "/api/providers") {
+      return { ok: true, json: async () => ({
+        providers: ["custom:s1", "ollama", "lmstudio"],
+        labels: { "custom:s1": "DeepSeek", ollama: "Ollama (本地)", lmstudio: "LM Studio (本地)" },
+        current_provider: "custom:s1", current_model: "deepseek-reasoner",
+        effective_provider: "custom:s1", effective_model: "deepseek-reasoner",
+        custom_services: [service], local_api: { ollama: "http://localhost:11434", lmstudio: "http://localhost:1234" },
+        research_prefs: { max_results: 8, detailed: true }, read_only: false,
+      }) };
+    }
+    if (url === "/api/settings" && method === "POST") return { ok: true, json: async () => ({ ok: true }) };
+    if (url === "/api/custom-providers" && method === "POST") {
+      sent.push(JSON.parse(options.body));
+      return { ok: true, json: async () => service };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  elements.get("custom-provider-preset").value = "deepseek";
+  await elements.get("custom-provider-preset").dispatch("change");
+  assert.equal(elements.get("custom-provider-url").value, "https://api.deepseek.com/v1");
+
+  run("openCustomProvider()");
+  elements.get("custom-provider-preset").value = "deepseek";
+  await elements.get("custom-provider-preset").dispatch("change");
+  elements.get("custom-provider-key").value = "user-entered-key";
+  const rows = elements.get("custom-provider-models");
+  rows.children[0].querySelector(".input").value = "deepseek-chat";
+  await elements.get("btn-add-service-model").dispatch("click");
+  rows.children[1].querySelector(".input").value = "deepseek-reasoner";
+  rows.children[0].querySelector('input[type="radio"]').checked = false;
+  rows.children[1].querySelector('input[type="radio"]').checked = true;
+  await elements.get("custom-provider-form").dispatch("submit");
+
+  assert.deepEqual(sent, [{
+    name: "DeepSeek", protocol: "openai", base_url: "https://api.deepseek.com/v1",
+    api_key: "user-entered-key", models: ["deepseek-chat", "deepseek-reasoner"],
+    default_model: "deepseek-reasoner",
+  }]);
+  assert.equal(elements.get("custom-provider-key").value, "");
 });
 
 test("queued tasks display a waiting label", () => {
@@ -132,6 +236,115 @@ test("model display follows effective server configuration", () => {
   };`);
   assert.equal(run("currentProviderModel().provider"), "deepseek");
   assert.equal(run("currentProviderModel().model"), "deepseek-chat");
+});
+
+test("paper Q&A evidence opens the source paragraph in the rewrite step", async () => {
+  const { context, run } = loadPage();
+  const calls = [];
+  run('paperState.paperId = "paper-1"');
+  context.pwLoadParagraphs = async () => calls.push("load");
+  context.pwSelectParagraph = async (id) => {
+    calls.push(`select:${id}`);
+    run(`paperState.selected = { id: "${id}" }`);
+  };
+  context.pwSetStep = (step, force) => calls.push(`step:${step}:${force}`);
+
+  await run('pwAskOpenBasis("p_0006")');
+
+  assert.deepEqual(calls, ["load", "select:p_0006", "step:5:true"]);
+});
+
+test("paper Q&A renders deduplicated and safely escaped source buttons", () => {
+  const { run } = loadPage();
+
+  const markup = run('pwRenderAskBasis(["p_0006", "p_0006", "x\\" onclick=\\"alert(1)"])');
+
+  assert.equal((markup.match(/data-ask-basis=/g) || []).length, 2);
+  assert.ok(markup.includes('data-ask-basis="p_0006"'));
+  assert.ok(markup.includes("&quot; onclick=&quot;"));
+  assert.ok(!markup.includes('data-ask-basis="x" onclick='));
+});
+
+test("history reports expose preview and download actions", async () => {
+  const { context, elements } = loadPage();
+  context.api = async () => ({ reports: [{ name: '报告 "A".md' }] });
+
+  await context.loadReports();
+
+  const markup = elements.get("report-list").children[0].innerHTML;
+  assert.match(markup, /data-act="preview"/);
+  assert.match(markup, /data-act="dl"/);
+  assert.match(markup, /报告 &quot;A&quot;\.md/);
+});
+
+test("history preview action opens the selected report", async () => {
+  const { context, elements } = loadPage();
+  context.fetch = async () => ({ ok: true, text: async () => "# Report" });
+  const button = { dataset: { act: "preview", name: "report.md" } };
+
+  await elements.get("report-list").dispatch("click", {
+    target: { closest: () => button },
+  });
+
+  assert.equal(elements.get("report-preview-dialog").open, true);
+  assert.equal(elements.get("report-preview-title").textContent, "report.md");
+});
+
+test("history preview fetches and safely renders the selected report", async () => {
+  const { context, elements, run } = loadPage();
+  run('currentReport = { name: "current.md", text: "current report" }');
+  const requested = [];
+  context.fetch = async (url) => {
+    requested.push(url);
+    return {
+      ok: true,
+      text: async () => "# Historical report\n\n<script>not executable</script>\n\n**Findings**",
+    };
+  };
+
+  await context.previewReport("报告 A.md");
+
+  assert.deepEqual(requested, ["/api/reports/%E6%8A%A5%E5%91%8A%20A.md"]);
+  assert.equal(elements.get("report-preview-dialog").open, true);
+  assert.equal(elements.get("report-preview-title").textContent, "报告 A.md");
+  assert.ok(elements.get("report-preview-body").innerHTML.includes("&lt;script&gt;"));
+  assert.ok(elements.get("report-preview-body").innerHTML.includes("<strong>Findings</strong>"));
+  assert.equal(run("currentReport.name"), "current.md");
+});
+
+test("history preview reports fetch errors inside the dialog", async () => {
+  const { context, elements } = loadPage();
+  context.fetch = async () => ({
+    ok: false,
+    status: 404,
+    json: async () => ({ detail: "报告不存在" }),
+  });
+
+  await context.previewReport("missing.md");
+
+  assert.equal(elements.get("report-preview-dialog").open, true);
+  assert.equal(elements.get("report-preview-status").textContent, "预览失败：报告不存在");
+});
+
+test("history preview download buttons target the previewed report", async () => {
+  const { context, elements } = loadPage();
+  const anchors = [];
+  context.document.body = { appendChild() {} };
+  context.document.createElement = () => {
+    const anchor = { click() {}, remove() {} };
+    anchors.push(anchor);
+    return anchor;
+  };
+  context.fetch = async () => ({ ok: true, text: async () => "# Report" });
+
+  await context.previewReport("preview.md");
+  await elements.get("btn-report-preview-md").dispatch("click");
+  await elements.get("btn-report-preview-docx").dispatch("click");
+
+  assert.deepEqual(anchors.map((anchor) => anchor.href), [
+    "/api/reports/preview.md",
+    "/api/reports/preview.md?format=docx",
+  ]);
 });
 
 test("adopting a rewrite refreshes the version in the paper selector", async () => {
