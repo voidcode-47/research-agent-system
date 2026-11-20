@@ -14,6 +14,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
+from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response, StreamingResponse
@@ -890,11 +891,11 @@ def api_get_report(name: str, format: str = "md"):
             with open(fpath, encoding="utf-8") as f:
                 content = f.read()
             buf = md_to_docx(content)
-            from fastapi.responses import Response
+            download_name = quote(name.removesuffix(".md") + ".docx", safe="")
             return Response(
-                content=buf,
+                content=buf.getvalue(),
                 media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                headers={"Content-Disposition": f'attachment; filename="{name.replace(".md", ".docx")}"'},
+                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{download_name}"},
             )
         except Exception as e:
             raise HTTPException(500, f"Word 导出失败: {e}")

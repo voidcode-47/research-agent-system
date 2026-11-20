@@ -488,6 +488,7 @@ async function previewReport(name) {
   $("btn-report-preview-md").disabled = true;
   $("btn-report-preview-docx").disabled = true;
   if (!dialog.open) dialog.showModal();
+  dialog.scrollTop = 0;
   try {
     const response = await fetch(`/api/reports/${encodeURIComponent(name)}`);
     if (!response.ok) {
@@ -496,14 +497,14 @@ async function previewReport(name) {
       throw new Error(detail || `HTTP ${response.status}`);
     }
     const text = await response.text();
-    if (requestId !== reportPreviewRequest) return;
+    if (!dialog.open || requestId !== reportPreviewRequest) return;
     body.innerHTML = renderMarkdown(text);
     previewedReportName = name;
     status.textContent = "";
     $("btn-report-preview-md").disabled = false;
     $("btn-report-preview-docx").disabled = false;
   } catch (e) {
-    if (requestId === reportPreviewRequest) status.textContent = `预览失败：${e.message}`;
+    if (dialog.open && requestId === reportPreviewRequest) status.textContent = `预览失败：${e.message}`;
   }
 }
 
@@ -593,10 +594,7 @@ $("report-list").addEventListener("click", async (e) => {
   if (btn.dataset.act === "preview") {
     await previewReport(name);
   } else if (btn.dataset.act === "dl") {
-    const a = document.createElement("a");
-    a.href = `/api/reports/${encodeURIComponent(name)}`;
-    a.download = "";
-    document.body.appendChild(a); a.click(); a.remove();
+    downloadReportFile(name, "md");
   } else if (btn.dataset.act === "del") {
     if (!confirm(`删除报告：${name}？`)) return;
     try {

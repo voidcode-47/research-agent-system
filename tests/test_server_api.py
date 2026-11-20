@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """server.py（FastAPI Web 服务）API 层测试。"""
 from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
 
@@ -99,6 +100,20 @@ def test_report_download(tmp_path, monkeypatch):
     r = client.get("/api/reports/ok.md")
     assert r.status_code == 200
     assert "# 标题" in r.text
+
+
+def test_report_word_download_preserves_chinese_filename(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "REPORT_DIR", str(tmp_path))
+    name = "研究报告 中文.md"
+    (tmp_path / name).write_text("# 中文报告\n\n正文", encoding="utf-8")
+
+    response = client.get(f"/api/reports/{quote(name)}?format=docx")
+
+    assert response.status_code == 200
+    assert response.headers["content-disposition"] == (
+        f"attachment; filename*=UTF-8''{quote('研究报告 中文.docx')}"
+    )
+    assert response.content.startswith(b"PK")
 
 
 def test_report_download_traversal(tmp_path, monkeypatch):
