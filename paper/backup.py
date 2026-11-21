@@ -92,10 +92,36 @@ def _backup_files(paper_id: str) -> list[tuple[str, str]]:
 
 
 def create_backup_archive(paper_id: str, dest_path: str) -> dict:
-    """生成 zip 备份；先写临时文件，成功后原子替换目标文件。"""
+    """在存储锁内复制一致快照，再在锁外压缩，避免阻塞模型结果提交。"""
     pid = store.validate_paper_id(paper_id)
-    store.load_meta(pid)
-    files = _backup_files(pid)
+    with tempfile.TemporaryDirectory(prefix="paper-backup-snapshot-") as staging:
+        files = []
+        total = 0
+        with store.locked():
+            store.load_meta(pid)
+            sources = _backup_files(pid)
+            if len(sources) > MAX_BACKUP_FILES:
+                raise BackupError("备份文件数量超过恢复上限，请先整理旧版本")
+            for rel, source in sources:
+                target = os.path.join(staging, *rel.split("/"))
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                size = 0
+                with open(source, "rb") as src, open(target, "wb") as dst:
+                    while chunk := src.read(1024 * 1024):
+                        size += len(chunk)
+                        total += len(chunk)
+                        if size > MAX_BACKUP_FILE_BYTES or total > MAX_BACKUP_UNCOMPRESSED_BYTES:
+                            raise BackupError("论文数据超过备份体积上限")
+                        dst.write(chunk)
+                files.append((rel, target))
+        # Use the restore validator against the frozen files so generation cannot
+        # publish an archive that the same application would reject on restore.
+        _validate_paper_tree(staging, {"paper_id": pid})
+        return _write_backup_archive(pid, files, dest_path)
+
+
+def _write_backup_archive(pid: str, files: list[tuple[str, str]], dest_path: str) -> dict:
+    """生成 zip 备份；先写临时文件，成功后原子替换目标文件。"""
     paths = {rel for rel, _ in files}
     required = {"paper/meta.json", "paper/parsed.json"}
     if not required.issubset(paths):
@@ -141,6 +167,8 @@ def create_backup_archive(paper_id: str, dest_path: str) -> dict:
                 "files": records,
             }
             zf.writestr("manifest.json", _json_bytes(manifest))
+        if os.path.getsize(tmp) > MAX_BACKUP_UPLOAD_BYTES:
+            raise BackupError("备份压缩后体积超过恢复上限（200MB）")
         os.replace(tmp, dest_path)
     except BackupError:
         if os.path.exists(tmp):
