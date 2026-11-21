@@ -150,7 +150,7 @@ def test_research_background_worker_keeps_admin_identity(research_env, monkeypat
     task_id = response.json()["task_id"]
     env.wait_finished(task_id)
     assert env.client.get(f"/api/research/{task_id}").json()["status"] == "done"
-    assert env.model.chat_admin == [True]
+    assert env.model.chat_admin and all(env.model.chat_admin)
     assert quota.usage_snapshot()["used"] == 0
     assert quota.usage_snapshot()["reserved"] == 0
 

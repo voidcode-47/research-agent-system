@@ -209,6 +209,8 @@ def generate_guideline(llm, parsed: dict, requirement: dict | None,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         paper_id=paper_id,
         max_tokens=4096,
+        timeout=240,
+        llm_options={"extra_body": {"enable_thinking": False}},
         validator=_valid_guide,
     )
     if should_cancel is not None and should_cancel():
@@ -277,6 +279,8 @@ def rewrite_paragraph(llm, text: str, requirement: dict | None, mode: str = "dea
         "deai_rewrite",
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         paper_id=paper_id,
+        timeout=180,
+        llm_options={"extra_body": {"enable_thinking": False}},
         validator=validate,
     )
     revised = str(data.get("revised") or "").strip()

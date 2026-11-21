@@ -76,6 +76,8 @@ class OpenAICompatibleLLM(BaseLLM):
         self.api_key = api_key or "local"
         self.base_url = base_url.rstrip("/")
         self.is_local = is_local
+        # 某些提供商不支持 extra_body（如 enable_thinking），失败一次后不再发送
+        self._drop_extra_body = False
         # 先创建对话 client（超时 60s 留给长推理），再做模型自动发现。
         # max_retries=0：重试统一由 chat 上的 @retry 负责，
         # 否则 SDK 默认重试 2 次 × 装饰器 3 次 = 最多 9 次请求，成倍消耗配额
@@ -100,6 +102,7 @@ class OpenAICompatibleLLM(BaseLLM):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
+        extra_body: Optional[dict] = None,
     ) -> ChatResponse:
         """同步对话。
 
@@ -107,6 +110,8 @@ class OpenAICompatibleLLM(BaseLLM):
             max_tokens: 输出上限。本地模型（LM Studio/Ollama）默认输出很短（约 512
                 tokens），生成报告会被截断；默认给 4096，报告生成可传更大值。
             timeout: 单次请求超时（秒）。长报告生成需要大于客户端默认 60 秒。
+            extra_body: 额外请求字段（如 {"enable_thinking": False} 关闭推理模型的
+                内部思考）。提供商不支持时自动降级为不发送并记住该能力。
         """
         kwargs: dict = {
             "model": self.model,
@@ -117,6 +122,8 @@ class OpenAICompatibleLLM(BaseLLM):
             kwargs["max_tokens"] = max_tokens
         if timeout:
             kwargs["timeout"] = timeout
+        if extra_body and not self._drop_extra_body:
+            kwargs["extra_body"] = extra_body
         if tools:
             kwargs["tools"] = self._format_tools(tools)
 
@@ -159,6 +166,16 @@ class OpenAICompatibleLLM(BaseLLM):
         except _RETRYABLE_ERRORS:
             raise  # 交给重试装饰器
         except APIError as e:
+            # 提供商不认识 extra_body（如 enable_thinking）：去掉后重发一次，
+            # 并记住该实例不再发送，避免后续每次调用都多花一个请求。
+            if extra_body and "extra_body" in kwargs and getattr(e, "status_code", None) == 400:
+                self._drop_extra_body = True
+                logger.info(f"[{self.provider}] 不支持 extra_body，后续请求将不再发送")
+                kwargs.pop("extra_body", None)
+                try:
+                    return self._parse_response(self.client.chat.completions.create(**kwargs))
+                except APIError as e2:
+                    e = e2
             # 本地部分模型不支持 Function Calling：400 且错误与 tools 相关时，
             # 自动降级为纯对话重试一次，避免整个对话不可用
             if (
@@ -192,6 +209,7 @@ class OpenAICompatibleLLM(BaseLLM):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         timeout: Optional[float] = None,
+        extra_body: Optional[dict] = None,
     ) -> Iterator[str]:
         """流式输出。"""
         kwargs: dict = {
@@ -204,10 +222,22 @@ class OpenAICompatibleLLM(BaseLLM):
             kwargs["max_tokens"] = max_tokens
         if timeout is not None:
             kwargs["timeout"] = timeout
+        if extra_body and not self._drop_extra_body:
+            kwargs["extra_body"] = extra_body
         if tools:
             kwargs["tools"] = self._format_tools(tools)
 
-        stream = self.client.chat.completions.create(**kwargs)
+        try:
+            stream = self.client.chat.completions.create(**kwargs)
+        except APIError as e:
+            if extra_body and "extra_body" in kwargs and getattr(e, "status_code", None) == 400:
+                self._drop_extra_body = True
+                logger.info(f"[{self.provider}] 不支持 extra_body，后续请求将不再发送")
+                kwargs.pop("extra_body", None)
+                stream = self.client.chat.completions.create(**kwargs)
+            else:
+                raise
+
         reason = None
         try:
             for chunk in stream:

@@ -72,9 +72,16 @@ class Version(Contract):
 class Format(Contract):
     template: Literal["generic_thesis", "journal_cn", "ieee", "apa"] = "generic_thesis"
     reference_style: Literal["gbt7714", "ieee", "apa"] = "gbt7714"
+    # True 表示字段值来自需求表单，导出时不再按模板默认值二次覆盖
+    explicit: bool = False
     font_body: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "宋体"
+    font_latin: Annotated[str, StringConstraints(min_length=1, max_length=100)] = "Times New Roman"
     font_size_body_pt: float = Field(default=12, ge=8, le=24)
     line_spacing: float = Field(default=1.5, ge=1, le=3)
+    space_before_pt: float = Field(default=0, ge=0, le=72)
+    space_after_pt: float = Field(default=0, ge=0, le=72)
+    first_line_indent_chars: float = Field(default=2, ge=0, le=10)
+    page_break_before_heading: bool = True
     heading_numbering: Literal["decimal", "chinese", "none"] = "decimal"
     figure_caption_below: bool = True
     table_caption_above: bool = True

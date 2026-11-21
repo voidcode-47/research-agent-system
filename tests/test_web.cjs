@@ -496,6 +496,13 @@ test("tracked export requests revision mode", async () => {
   context.document.createElement = () => ({ click() {}, remove() {} });
   let requested;
   context.fetch = async (url) => {
+    if (String(url).includes("format-check")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ has_original_docx: true, compliant: true, issues: [] }),
+      };
+    }
     requested = url;
     return { ok: true, headers: { get: () => "" }, blob: async () => ({}) };
   };
@@ -504,8 +511,38 @@ test("tracked export requests revision mode", async () => {
 
   await context.pwExport("docx", true);
 
-  assert.equal(requested, "/api/paper/p1/export?format=docx&tracked=true");
+  assert.equal(requested, "/api/paper/p1/export?format=docx&tracked=true&format_mode=original");
   assert.ok(alerts.some((m) => m.includes("修订版")));
+});
+
+test("tracked export asks before adjusting non-compliant fonts", async () => {
+  const { context, run } = loadPage();
+  run('paperState.paperId = "p1"');
+  context.URL = { createObjectURL: () => "blob:x", revokeObjectURL() {} };
+  context.document.body = { appendChild() {} };
+  context.document.createElement = () => ({ click() {}, remove() {} });
+  let requested;
+  context.fetch = async (url) => {
+    if (String(url).includes("format-check")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          has_original_docx: true,
+          compliant: false,
+          issues: ["正文主要字体为 仿宋，论文规范要求 宋体"],
+        }),
+      };
+    }
+    requested = url;
+    return { ok: true, headers: { get: () => "" }, blob: async () => ({}) };
+  };
+  context.confirm = () => true;
+  context.pwAlert = () => {};
+
+  await context.pwExport("docx", true);
+
+  assert.equal(requested, "/api/paper/p1/export?format=docx&tracked=true&format_mode=thesis");
 });
 
 test("Markdown escapes markup and refuses executable links", () => {

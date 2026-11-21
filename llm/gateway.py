@@ -91,6 +91,29 @@ def extract_json(text: str):
     return None
 
 
+def _is_timeout_error(err: Exception) -> bool:
+    """判断是否为请求超时（含 OpenAI/httpx 的超时异常）。"""
+    if isinstance(err, TimeoutError):
+        return True
+    name = type(err).__name__.lower()
+    return "timeout" in name or "timed out" in str(err).lower()
+
+
+def _merge_continuation(text: str, extra: str) -> str:
+    """合并截断续写，尽量去掉模型重复输出的最后一句。"""
+    extra = (extra or "").lstrip()
+    if not extra:
+        return text
+    if not text:
+        return extra
+    window = min(200, len(text), len(extra))
+    for size in range(window, 2, -1):
+        if text.endswith(extra[:size]):
+            return text + extra[size:]
+    separator = "" if text.endswith("\n") else "\n\n"
+    return text + separator + extra
+
+
 class LLMGateway:
     """所有论文相关 LLM 调用的唯一入口。"""
 
@@ -108,6 +131,9 @@ class LLMGateway:
         expect_json: bool = True,
         validator=None,
         timeout: float | None = None,
+        on_progress=None,
+        max_continuations: int = 2,
+        llm_options: dict | None = None,
     ):
         task = LLM_TASKS.get(task_type)
         if not task:
@@ -127,28 +153,69 @@ class LLMGateway:
         for attempt in range(2):
             started = time.monotonic()
             resp = None
+            collected = ""
+            continuations = 0
             try:
-                options = {"timeout": timeout} if timeout is not None else {}
-                resp = self.llm.chat(msgs, temperature=temperature, max_tokens=limit, **options)
-                content = getattr(resp, "content", "") or ""
-                if _provider_error(content):
-                    msg = content.strip()[:200]
-                    if re.search(r"401|403|authentication|api[\s_-]*key", msg, re.I):
-                        msg += "。请在侧边栏「添加模型」并填写有效 API Key 后重试。"
-                    raise _ModelCallFailed(msg)
-                completion_received = completion_received or bool(content.strip())
-                reason = getattr(resp, "finish_reason", "")
-                if reason and reason not in ("stop", "end_turn", "stop_sequence", "STOP"):
-                    raise ValueError("模型输出未完整结束（" + str(reason)[:80] + "）")
-                data = extract_json(content) if expect_json else content
-                if expect_json and data is None:
-                    raise ValueError("模型输出不是合法 JSON")
-                if validator is not None and not validator(data):
-                    if _unbalanced(content):
-                        raise ValueError("模型输出不完整（可能超出长度上限被截断）")
-                    raise ValueError("模型输出未通过结构校验")
-                self._audit(task_type, paper_id, resp, started, True)
-                return data
+                while True:
+                    options = {"timeout": timeout} if timeout is not None else {}
+                    if llm_options:
+                        options.update(llm_options)
+                    resp = self.llm.chat(msgs, temperature=temperature,
+                                         max_tokens=limit, **options)
+                    content = getattr(resp, "content", "") or ""
+                    if _provider_error(content):
+                        msg = content.strip()[:200]
+                        if re.search(r"401|403|authentication|api[\s_-]*key", msg, re.I):
+                            msg += "。请在侧边栏「添加模型」并填写有效 API Key 后重试。"
+                        raise _ModelCallFailed(msg)
+                    completion_received = completion_received or bool(content.strip())
+                    reason = str(getattr(resp, "finish_reason", "") or "")
+                    truncated = bool(reason) and reason not in (
+                        "stop", "end_turn", "stop_sequence", "STOP"
+                    )
+                    if truncated and not expect_json and content.strip():
+                        collected = (_merge_continuation(collected, content)
+                                     if collected else content)
+                        if continuations < max_continuations:
+                            continuations += 1
+                            self._audit(task_type, paper_id, resp, started, False,
+                                        "输出被截断，自动续写")
+                            if on_progress is not None:
+                                try:
+                                    on_progress(continuations)
+                                except Exception:
+                                    logger.debug("续写进度回调失败", exc_info=True)
+                            msgs = list(messages) + [
+                                {"role": "assistant", "content": collected[-1200:]},
+                                {
+                                    "role": "user",
+                                    "content": (
+                                        "上一条输出因长度限制中断。请紧接中断处继续输出"
+                                        "剩余内容；不要重复已写部分，不要重新开头，"
+                                        "也不要输出任何解释。"
+                                    ),
+                                },
+                            ]
+                            continue
+                        # 续写次数用尽：保留已生成内容，避免用户长时间等待后前功尽弃
+                        if validator is not None and not validator(collected):
+                            raise ValueError("模型输出未完整结束（达到续写上限）")
+                        self._audit(task_type, paper_id, resp, started, True)
+                        return collected
+                    if truncated:
+                        raise ValueError("模型输出未完整结束（" + reason[:80] + "）")
+
+                    final_content = (_merge_continuation(collected, content)
+                                     if collected else content)
+                    data = extract_json(final_content) if expect_json else final_content
+                    if expect_json and data is None:
+                        raise ValueError("模型输出不是合法 JSON")
+                    if validator is not None and not validator(data):
+                        if _unbalanced(final_content):
+                            raise ValueError("模型输出不完整（可能超出长度上限被截断）")
+                        raise ValueError("模型输出未通过结构校验")
+                    self._audit(task_type, paper_id, resp, started, True)
+                    return data
             except _ModelCallFailed:
                 if charged and not completion_received:
                     self._refund(charge)
@@ -156,7 +223,8 @@ class LLMGateway:
             except Exception as e:
                 last_err = e
                 self._audit(task_type, paper_id, resp, started, False, str(e))
-                if attempt == 0:
+                # 超时重试只会让用户再等一轮且大概率仍超时，直接失败更快
+                if attempt == 0 and not _is_timeout_error(e):
                     msgs = list(messages) + [{
                         "role": "user",
                         "content": (
@@ -171,7 +239,7 @@ class LLMGateway:
 
     def stream(self, task_type: str, messages: list[dict], *,
                temperature: float = 0.3, max_tokens: int | None = None,
-               timeout: float | None = None):
+               timeout: float | None = None, llm_options: dict | None = None):
         """流式逻辑调用只扣一次；无输出失败退款，已有输出的失败保留计费。"""
         task = LLM_TASKS.get(task_type)
         if not task:
@@ -183,6 +251,8 @@ class LLMGateway:
         stream = None
         try:
             options = {"timeout": timeout} if timeout is not None else {}
+            if llm_options:
+                options.update(llm_options)
             stream = self.llm.stream_chat(messages, temperature=temperature, max_tokens=limit, **options)
             for chunk in stream:
                 if not chunk:

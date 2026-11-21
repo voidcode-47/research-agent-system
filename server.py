@@ -662,10 +662,10 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
             finish_cancelled()
             return
 
-        log("write", "✍️ 正在基于参考文献生成综合报告（通常需要 30-90 秒）...", 70)
+        log("write", "✍️ 正在基于参考文献生成综合报告（通常需要 1-2 分钟）...", 70)
         topic_block = req.topic.strip()[:500]
         context = _reference_context(refs)
-        length_hint = "篇幅约 2200-3200 字，分析尽量具体" if req.detailed else "篇幅约 1200-1800 字，重点突出"
+        length_hint = "篇幅约 1800-2400 字，分析尽量具体" if req.detailed else "篇幅约 1000-1400 字，重点突出"
         messages = [
             {
                 "role": "system",
@@ -704,10 +704,13 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
                 ),
             },
         ]
+        # 单次生成，不自动续写：续写会让免费推理模型耗时翻几倍；
+        # enable_thinking=False 关闭推理模型的内部思考，避免 token 全耗在思考上。
         content = LLMGateway(llm).run(
             "research_report", messages, temperature=0.35,
-            max_tokens=3500 if req.detailed else 2200, timeout=180,
-            expect_json=False,
+            max_tokens=3500 if req.detailed else 2400, timeout=240,
+            expect_json=False, max_continuations=0,
+            llm_options={"extra_body": {"enable_thinking": False}},
             validator=lambda text: len(text.strip()) >= 80 and _is_report_ok(text),
         ).strip()
         if cancelled():
@@ -719,6 +722,12 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
             raise RuntimeError(content[:200])
         if len(content) < 80:
             raise RuntimeError("模型返回内容过短，未能生成有效报告，请重试。")
+        if "## 九、" not in content:
+            log("write", "⚠️ 报告末章未完整生成，已保留现有内容", 90)
+            content += (
+                "\n\n> 注：受模型单次输出长度限制，报告最后章节可能未完整生成。"
+                "可再次发起调研或要求补写该章节。"
+            )
         log("save", "💾 正在保存报告...", 90)
 
         safe_topic = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", req.topic)[:20].strip(" .") or "调研"
@@ -881,7 +890,10 @@ def _followup_worker(task_id: str, paper_id: str, llm, messages: list[dict], out
                 continue
         return False
 
-    stream = LLMGateway(llm).stream("research_followup", messages, temperature=0.6)
+    stream = LLMGateway(llm).stream(
+        "research_followup", messages, temperature=0.6, timeout=180,
+        llm_options={"extra_body": {"enable_thinking": False}},
+    )
     try:
         for chunk in stream:
             if not send({"type": "delta", "text": chunk}):

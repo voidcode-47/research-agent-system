@@ -816,7 +816,25 @@ def test_rewrite_apply_and_export(env, tmp_path):
     tracked_doc = docx.Document(io.BytesIO(tracked.content))
     tracked_xml = tracked_doc.element.xml
     assert "<w:ins" in tracked_xml and "<w:del" in tracked_xml
-    assert result["revised"] in tracked_xml and result["original"] in tracked_xml
+
+    def track_text(paragraph, accept):
+        from docx.oxml.ns import qn
+
+        parts = []
+        for child in paragraph._p:
+            tag = child.tag.split("}")[-1]
+            if tag == "del":
+                if not accept:
+                    parts.extend(n.text or "" for n in child.iter(qn("w:delText")))
+            elif tag == "ins":
+                if accept:
+                    parts.extend(n.text or "" for n in child.iter(qn("w:t")))
+            else:
+                parts.extend(n.text or "" for n in child.iter(qn("w:t")))
+        return "".join(parts)
+
+    assert result["revised"] in [track_text(p, True) for p in tracked_doc.paragraphs]
+    assert result["original"] in [track_text(p, False) for p in tracked_doc.paragraphs]
 
     exp_pdf = client.get(f"/api/paper/{pid}/export?format=pdf")
     assert exp_pdf.status_code == 200
@@ -1197,6 +1215,10 @@ def test_export_uses_original_filename_and_summary(env, tmp_path):
     text = "\n".join(p.text for p in document.paragraphs)
     assert "修改说明" in text
 
+    check = client.get(f"/api/paper/{pid}/format-check")
+    assert check.status_code == 200
+    assert check.json()["has_original_docx"] is False
+
 
 # ---------- 论文问答 ----------
 def _make_docx(path):
@@ -1234,6 +1256,29 @@ def _upload_docx(tmp_path):
                  "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
     })
     return _upload_report(r)["paper_id"]
+
+
+def test_docx_format_check_and_tracked_export(env, tmp_path):
+    pid = _upload_docx(tmp_path)
+
+    check = client.get(f"/api/paper/{pid}/format-check")
+    assert check.status_code == 200
+    body = check.json()
+    assert body["has_original_docx"] is True
+    assert "font_body" in body["required"]
+
+    tracked = client.get(
+        f"/api/paper/{pid}/export?format=docx&tracked=true&format_mode=original"
+    )
+    assert tracked.status_code == 200
+    document = docx.Document(io.BytesIO(tracked.content))
+    assert document.tables, "修订版应保留原文表格"
+    assert any(p.text == "摘要" for p in document.paragraphs)
+
+    bad = client.get(
+        f"/api/paper/{pid}/export?format=docx&tracked=true&format_mode=bogus"
+    )
+    assert bad.status_code == 400
 
 
 def test_ask_and_rejection(env, tmp_path):

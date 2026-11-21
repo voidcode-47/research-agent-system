@@ -8,9 +8,10 @@ from utils import auth, quota
 
 
 class FakeResp:
-    def __init__(self, content):
+    def __init__(self, content, finish_reason=""):
         self.content = content
         self.usage = {"total_tokens": 7}
+        self.finish_reason = finish_reason
 
 
 class FakeLLM:
@@ -20,7 +21,8 @@ class FakeLLM:
 
     def chat(self, messages, temperature=0.7, max_tokens=None):
         self.calls += 1
-        return FakeResp(self.contents.pop(0))
+        item = self.contents.pop(0)
+        return item if isinstance(item, FakeResp) else FakeResp(item)
 
 
 class RaisingLLM:
@@ -165,3 +167,56 @@ def test_admin_failure_does_not_refund_regular_quota():
     finally:
         auth.reset_admin(token)
     assert _used() == 1
+
+
+def test_continuation_merge_drops_repeated_overlap():
+    from llm.gateway import _merge_continuation
+
+    assert _merge_continuation("abcdef", "defghi") == "abcdefghi"
+    assert _merge_continuation("abc", "xyz") == "abc\n\nxyz"
+
+
+def test_text_truncation_auto_continues_and_reports_progress():
+    llm = FakeLLM(
+        FakeResp("## 一、研究背景\n人脸识别发展迅速。", "length"),
+        FakeResp("\n\n## 二、研究现状\n已有大量研究。", "stop"),
+    )
+    steps = []
+    text = LLMGateway(llm).run(
+        "research_report", [{"role": "user", "content": "x"}],
+        expect_json=False,
+        validator=lambda t: len(t) >= 10,
+        on_progress=steps.append,
+    )
+    assert "## 一、研究背景" in text and "## 二、研究现状" in text
+    assert steps == [1]
+    assert llm.calls == 2
+    assert _used() == 1
+
+
+def test_text_truncation_keeps_partial_after_continuation_limit():
+    llm = FakeLLM(
+        FakeResp("A" * 100, "length"),
+        FakeResp("B" * 100, "length"),
+        FakeResp("C" * 100, "length"),
+    )
+    text = LLMGateway(llm).run(
+        "research_report", [{"role": "user", "content": "x"}],
+        expect_json=False,
+        validator=lambda t: len(t) >= 50,
+    )
+    assert "A" * 100 in text and "B" * 100 in text and "C" * 100 in text
+    assert llm.calls == 3
+
+
+def test_json_truncation_still_retries_and_fails():
+    llm = FakeLLM(
+        FakeResp('{"score": 80', "length"),
+        FakeResp('{"score": 80', "length"),
+    )
+    with pytest.raises(RuntimeError, match="未完整结束"):
+        LLMGateway(llm).run(
+            "level_diagnose", [{"role": "user", "content": "x"}],
+            validator=lambda d: isinstance(d, dict),
+        )
+    assert llm.calls == 2

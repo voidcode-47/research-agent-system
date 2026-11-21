@@ -125,9 +125,15 @@ DEAI_KEEP_OPTIONS = ["数据", "术语", "引用"]
 
 DEFAULT_FORMAT: dict = {
     "template": "generic_thesis",
+    # 中文字体（写入 w:eastAsia）与英文字体/数字（写入 w:ascii/w:hAnsi）
     "font_body": "宋体",
+    "font_latin": "Times New Roman",
     "font_size_body_pt": 12,
     "line_spacing": 1.5,
+    "space_before_pt": 0,
+    "space_after_pt": 0,
+    "first_line_indent_chars": 2,
+    "page_break_before_heading": True,
     "heading_numbering": "decimal",
     "reference_style": "gbt7714",
     "figure_caption_below": True,
@@ -137,16 +143,22 @@ DEFAULT_FORMAT: dict = {
 # 选择模板时的排版默认值：需求中仍是通用默认值的字段按模板生效。
 TEMPLATE_FORMAT_DEFAULTS: dict[str, dict] = {
     "generic_thesis": {},
-    "journal_cn": {},
+    "journal_cn": {
+        "page_break_before_heading": False,
+    },
     "ieee": {
-        "font_body": "Times New Roman", "font_size_body_pt": 10,
-        "line_spacing": 1.0, "heading_numbering": "decimal",
-        "reference_style": "ieee",
+        "font_body": "宋体", "font_latin": "Times New Roman",
+        "font_size_body_pt": 10, "line_spacing": 1.0,
+        "space_before_pt": 0, "space_after_pt": 0,
+        "first_line_indent_chars": 0, "page_break_before_heading": False,
+        "heading_numbering": "decimal", "reference_style": "ieee",
     },
     "apa": {
-        "font_body": "Times New Roman", "font_size_body_pt": 12,
-        "line_spacing": 2.0, "heading_numbering": "none",
-        "reference_style": "apa",
+        "font_body": "宋体", "font_latin": "Times New Roman",
+        "font_size_body_pt": 12, "line_spacing": 2.0,
+        "space_before_pt": 0, "space_after_pt": 0,
+        "first_line_indent_chars": 0, "page_break_before_heading": False,
+        "heading_numbering": "none", "reference_style": "apa",
     },
 }
 

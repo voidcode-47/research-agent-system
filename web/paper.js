@@ -505,6 +505,43 @@ function pwApplyOptions() {
   })));
   pwFillSelect($("paper-mode"), o.rewrite_modes || []);
   $("paper-quota").textContent = pwQuotaText(o.quota);
+  const template = $("paper-template");
+  if (!template.dataset.formatBound) {
+    template.dataset.formatBound = "1";
+    template.addEventListener("change", () => {
+      const defaults = (paperState.options || {}).format_defaults || {};
+      const chosen = defaults[template.value];
+      if (!chosen) return;
+      pwApplyFormatToInputs(chosen);
+      if (chosen.reference_style) $("paper-refstyle").value = chosen.reference_style;
+    });
+  }
+}
+
+function pwEffectiveRequirementFormat(fmt) {
+  const o = paperState.options || {};
+  const base = o.format_baseline || {};
+  const template = fmt.template || "generic_thesis";
+  if (fmt.explicit) return { ...base, ...fmt, template };
+  const overrides = (o.format_defaults || {})[template] || {};
+  const eff = { ...base, ...overrides };
+  Object.keys(fmt).forEach((key) => {
+    if (key in overrides && fmt[key] === base[key]) return;
+    eff[key] = fmt[key];
+  });
+  eff.template = template;
+  return eff;
+}
+
+function pwApplyFormatToInputs(fmt) {
+  $("paper-font-cn").value = fmt.font_body || "宋体";
+  $("paper-font-latin").value = fmt.font_latin || "Times New Roman";
+  $("paper-font-size").value = fmt.font_size_body_pt != null ? fmt.font_size_body_pt : 12;
+  $("paper-line-spacing").value = fmt.line_spacing != null ? fmt.line_spacing : 1.5;
+  $("paper-space-before").value = fmt.space_before_pt != null ? fmt.space_before_pt : 0;
+  $("paper-space-after").value = fmt.space_after_pt != null ? fmt.space_after_pt : 0;
+  $("paper-indent").value = fmt.first_line_indent_chars != null ? fmt.first_line_indent_chars : 2;
+  $("paper-page-break").checked = fmt.page_break_before_heading !== false;
 }
 
 function pwError(e) {
@@ -914,6 +951,7 @@ function pwFillRequirement(req) {
   $("paper-level").value = req.level || "";
   $("paper-template").value = fmt.template || "generic_thesis";
   $("paper-refstyle").value = fmt.reference_style || "gbt7714";
+  pwApplyFormatToInputs(pwEffectiveRequirementFormat(fmt));
   $("paper-deai-strength").value = deai.strength || "medium";
   const keep = deai.keep || ["数据", "术语", "引用"];
   document.querySelectorAll("#paper-keep input").forEach((el) => {
@@ -921,6 +959,11 @@ function pwFillRequirement(req) {
   });
   $("paper-banned").value = (deai.banned_phrases || []).join("、");
   $("paper-notes").value = req.notes || "";
+}
+
+function pwNum(id, fallback) {
+  const value = Number($(id).value);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 async function pwConfirm() {
@@ -936,6 +979,15 @@ async function pwConfirm() {
       ...fmt,
       template: $("paper-template").value,
       reference_style: $("paper-refstyle").value,
+      explicit: true,
+      font_body: $("paper-font-cn").value.trim() || "宋体",
+      font_latin: $("paper-font-latin").value.trim() || "Times New Roman",
+      font_size_body_pt: pwNum("paper-font-size", 12),
+      line_spacing: pwNum("paper-line-spacing", 1.5),
+      space_before_pt: pwNum("paper-space-before", 0),
+      space_after_pt: pwNum("paper-space-after", 0),
+      first_line_indent_chars: pwNum("paper-indent", 2),
+      page_break_before_heading: $("paper-page-break").checked,
     },
     deai: { strength: $("paper-deai-strength").value, keep, banned_phrases: banned },
     notes: $("paper-notes").value.trim(),
@@ -2417,10 +2469,38 @@ function pwExportFilename(resp, format, fallbackName) {
   return plain ? plain[1].trim() : fallback;
 }
 
+async function pwTrackedFormatMode() {
+  // 原文是 docx 时优先在原文件上写修订；字体不符合论文规范时先询问用户
+  try {
+    const check = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}/format-check`);
+    if (!check || !check.has_original_docx) return "auto";
+    if (check.compliant) return "original";
+    const issues = (check.issues || []).map((x) => "· " + x).join("\n");
+    const req = check.required || {};
+    const spec = [
+      `中文 ${req.font_body || "-"} / 英文 ${req.font_latin || "-"}`,
+      `字号 ${req.font_size_body_pt != null ? req.font_size_body_pt : "-"} 磅`,
+      `行距 ${req.line_spacing != null ? req.line_spacing : "-"} 倍`,
+      `段前 ${req.space_before_pt != null ? req.space_before_pt : "-"} 磅 / 段后 ${req.space_after_pt != null ? req.space_after_pt : "-"} 磅`,
+      req.first_line_indent_chars ? `首行缩进 ${req.first_line_indent_chars} 字符` : "无首行缩进",
+      req.page_break_before_heading ? "每章另起一页" : "不强制章节分页",
+    ].join("；");
+    const adjust = confirm(
+      `原文格式与论文规范不一致：\n${issues}\n\n规范：${spec}\n\n` +
+      "点击“确定”按论文格式调整后再导出；点击“取消”完全保留原文格式导出。"
+    );
+    return adjust ? "thesis" : "original";
+  } catch (e) {
+    return "auto";
+  }
+}
+
 async function pwExport(format = "docx", tracked = false) {
   if (!paperState.paperId) { pwAlert("请先上传论文", "warn"); return; }
   try {
-    const query = `format=${format}` + (tracked ? "&tracked=true" : "");
+    const mode = tracked ? await pwTrackedFormatMode() : "";
+    const query = `format=${format}`
+      + (tracked ? `&tracked=true&format_mode=${encodeURIComponent(mode)}` : "");
     const resp = await fetch(`/api/paper/${encodeURIComponent(paperState.paperId)}/export?${query}`);
     if (!resp.ok) {
       let detail = "";
@@ -2437,7 +2517,12 @@ async function pwExport(format = "docx", tracked = false) {
     a.remove();
     URL.revokeObjectURL(url);
     if (tracked) {
-      pwAlert("修订版已导出：在 Word 中可逐条接受或拒绝段落改写。", "ok", 5);
+      pwAlert(
+        mode === "thesis"
+          ? "修订版已导出：正文按论文格式调整，修订标记可在 Word 中逐条接受或拒绝。"
+          : "修订版已导出：保留原文封面、目录、图片与字体，可在 Word 中逐条接受或拒绝修订。",
+        "ok", 5
+      );
     } else if (format === "summary") {
       pwAlert("《论文修改说明》已导出，可直接随修改稿一起提交。", "ok", 5);
     }

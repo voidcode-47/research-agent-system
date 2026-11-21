@@ -15,6 +15,7 @@ from llm.gateway import LLMGateway
 from paper import store
 from paper.context import sample_context
 from paper.contracts import Diagnosis, valid
+from paper.export import _effective_format
 from rules.deai_detector import detect, estimate_ai_rate
 from rules.format_rules import check_format
 from utils.logger import get_logger
@@ -156,6 +157,8 @@ def _diagnose_level(gateway: LLMGateway, parsed: dict, requirement: dict,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         paper_id=paper_id,
         temperature=0,
+        timeout=180,
+        llm_options={"extra_body": {"enable_thinking": False}},
         validator=_has_score,
     )
     return {
@@ -187,6 +190,8 @@ def _diagnose_feasibility(gateway: LLMGateway, parsed: dict, requirement: dict,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
         paper_id=paper_id,
         temperature=0,
+        timeout=180,
+        llm_options={"extra_body": {"enable_thinking": False}},
         validator=_has_score,
     )
     return {
@@ -206,7 +211,7 @@ def _diagnose_feasibility(gateway: LLMGateway, parsed: dict, requirement: dict,
 
 def _diagnose_format(gateway: LLMGateway, parsed: dict, requirement: dict,
                      paper_id: str) -> dict:
-    spec = (requirement.get("format") or {})
+    spec = _effective_format(requirement)
     result = check_format(parsed, spec)
     default_priorities = [
         {
@@ -366,6 +371,8 @@ def _diagnose_deai(gateway: LLMGateway, parsed: dict, requirement: dict,
                 "deai_detect",
                 [{"role": "system", "content": system}, {"role": "user", "content": user}],
                 paper_id=paper_id,
+                timeout=180,
+                llm_options={"extra_body": {"enable_thinking": False}},
                 validator=lambda d: isinstance(d, dict) and isinstance(d.get("suggestions"), list),
             )
             for it in data.get("suggestions") or []:

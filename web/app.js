@@ -617,39 +617,6 @@ function updateSettingsTable() {
     : "未配置";
   const admin = isAdmin();
   $("settings-readonly").classList.toggle("hidden", admin);
-  $("btn-save-research-settings").disabled = !admin;
-  $("set-results").disabled = !admin;
-  $("set-style").disabled = !admin;
-  // 调研默认参数回填
-  const rp = providersInfo.research_prefs || {};
-  if (rp.max_results) { $("set-results").value = Math.min(10, Math.max(5, rp.max_results)); $("set-v-results").textContent = $("set-results").value; }
-  if (rp.detailed !== undefined) $("set-style").value = rp.detailed ? "detailed" : "standard";
-}
-
-$("set-results").addEventListener("input", () => ($("set-v-results").textContent = $("set-results").value));
-
-$("btn-save-research-settings").addEventListener("click", async () => {
-  const statusEl = $("research-settings-status");
-  if (!isAdmin()) { statusEl.textContent = "仅管理员可修改设置"; return; }
-  try {
-    await postJSON("/api/settings", {
-      research_max_results: parseInt($("set-results").value, 10),
-      research_detailed: $("set-style").value === "detailed",
-    });
-    statusEl.textContent = "✅ 已保存，下次调研任务生效";
-    setTimeout(() => (statusEl.textContent = ""), 3000);
-  } catch (e) { statusEl.textContent = `❌ 保存失败：${e.message}`; }
-});
-
-// 调研页初始化：读取设置页保存的默认参数
-function applyResearchDefaults() {
-  if (!providersInfo) return;
-  const rp = providersInfo.research_prefs || {};
-  if (rp.max_results) {
-    $("results").value = Math.min(10, Math.max(5, rp.max_results));
-    $("v-results").textContent = $("results").value;
-  }
-  if (rp.detailed !== undefined) $("report-style").value = rp.detailed ? "detailed" : "standard";
 }
 
 // ---------- 设置页：模型服务 ----------
@@ -956,7 +923,6 @@ async function checkServer() {
   checkServer();
   await loadAuth();
   try { await loadProviders(); } catch (e) { console.error(e); }
-  applyResearchDefaults();
   switchPage("paper");
   if (typeof initPaperPage === "function") initPaperPage();
   else window.addEventListener("load", () => {

@@ -38,6 +38,7 @@ from config.paper import (
     REFERENCE_STYLES,
     REJECT_JAILBREAK,
     REWRITE_MODES,
+    TEMPLATE_FORMAT_DEFAULTS,
 )
 from config.prompts import PAPER_QA_PROMPT
 from config.settings import settings
@@ -49,7 +50,12 @@ from paper import contracts
 from paper import references
 from paper.analysis import DiagnosisCancelled, DiagnosisStale, diagnose, total_score
 from paper.chunks import build_qa_context
-from paper.export import export_docx, export_pdf, export_summary_docx
+from paper.export import (
+    export_docx,
+    export_pdf,
+    export_summary_docx,
+    inspect_original_format,
+)
 from paper.parser import (
     ParseCancelled,
     UploadValidationError,
@@ -739,6 +745,11 @@ def _suggest_requirement(parsed: dict) -> dict:
         template, ref = "journal_cn", "gbt7714"
     else:
         template, ref = "generic_thesis", "gbt7714"
+    # 中文论文即使提到 SCI/EI/会议，也不应套用英文版式（否则正文会被要求成
+    # Times New Roman 10 磅，与中文论文规范冲突）。
+    if cjk > latin and template in ("ieee", "apa"):
+        template = "journal_cn" if level.startswith("journal") else "generic_thesis"
+        ref = "gbt7714"
 
     return {
         "level": level,
@@ -767,6 +778,12 @@ def api_options(request: Request):
         "format_templates": [
             {"value": k, **v} for k, v in FORMAT_TEMPLATES.items()
         ],
+        # 每个模板生效后的完整排版参数，前端切换模板时直接回填展示
+        "format_defaults": {
+            k: {**DEFAULT_FORMAT, **(TEMPLATE_FORMAT_DEFAULTS.get(k) or {})}
+            for k in FORMAT_TEMPLATES
+        },
+        "format_baseline": DEFAULT_FORMAT,
         "reference_styles": [
             {"value": k, "label": v} for k, v in REFERENCE_STYLES.items()
         ],
@@ -1125,8 +1142,19 @@ def api_put_requirement(paper_id: str, body: RequirementBody):
     try:
         fmt["font_size_body_pt"] = float(fmt.get("font_size_body_pt") or 12)
         fmt["line_spacing"] = float(fmt.get("line_spacing") or 1.5)
+        fmt["space_before_pt"] = float(fmt.get("space_before_pt") or 0)
+        fmt["space_after_pt"] = float(fmt.get("space_after_pt") or 0)
+        fmt["first_line_indent_chars"] = float(
+            fmt.get("first_line_indent_chars") if fmt.get("first_line_indent_chars") is not None else 2
+        )
     except (TypeError, ValueError):
-        raise HTTPException(400, "字号或行距必须是数字")
+        raise HTTPException(400, "字号、行距、段间距或首行缩进必须是数字")
+    try:
+        fmt = contracts.Format(**fmt).model_dump()
+    except contracts.ValidationError:
+        raise HTTPException(
+            400, "格式参数超出允许范围（字号 8~24、行距 1~3、段距 0~72、缩进 0~10）"
+        )
 
     deai = {
         "strength": "medium",
@@ -1785,11 +1813,15 @@ def api_backup(paper_id: str):
 # 导出 / 删除 / 问答
 # ---------------------------------------------------------------------------
 @router.get("/{paper_id}/export")
-def api_export(paper_id: str, format: str = "docx", tracked: bool = False):
+def api_export(paper_id: str, format: str = "docx", tracked: bool = False,
+               format_mode: str = "auto"):
     meta = _paper_or_404(paper_id)
     fmt = (format or "docx").lower()
     if fmt not in ("docx", "pdf", "summary"):
         raise HTTPException(400, "仅支持导出 Word（docx）、PDF（pdf）或修改说明（summary）")
+    mode = (format_mode or "auto").lower()
+    if mode not in ("auto", "original", "thesis"):
+        raise HTTPException(400, "format_mode 仅支持 auto、original 或 thesis")
     paragraphs = store.current_paragraphs(paper_id)
     requirement = store.load_requirement(paper_id) or {}
     parsed = store.load_parsed(paper_id)
@@ -1826,7 +1858,8 @@ def api_export(paper_id: str, format: str = "docx", tracked: bool = False):
             headers={"Content-Disposition": _attachment_header(f"{stem}_优化版.pdf")},
         )
     try:
-        buf = export_docx(paper_id, paragraphs, requirement, tables, tracked=tracked)
+        buf = export_docx(paper_id, paragraphs, requirement, tables,
+                          tracked=tracked, format_mode=mode)
     except Exception as e:
         logger.exception("Word 导出失败")
         raise HTTPException(500, f"Word 导出失败：{e}")
@@ -1836,6 +1869,18 @@ def api_export(paper_id: str, format: str = "docx", tracked: bool = False):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": _attachment_header(filename)},
     )
+
+
+@router.get("/{paper_id}/format-check")
+def api_format_check(paper_id: str):
+    """检查原文正文字体是否符合已确认的论文格式，供前端提示是否调整。"""
+    _paper_or_404(paper_id)
+    requirement = store.load_requirement(paper_id) or {}
+    try:
+        return inspect_original_format(paper_id, requirement)
+    except Exception as e:
+        logger.exception("原文格式检查失败")
+        raise HTTPException(500, f"原文格式检查失败：{e}")
 
 
 @router.delete("/{paper_id}")
@@ -1896,6 +1941,8 @@ def api_ask(paper_id: str, body: AskBody):
             "paper_qa",
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             paper_id=paper_id,
+            timeout=180,
+            llm_options={"extra_body": {"enable_thinking": False}},
             validator=valid_answer,
         )
     except quota.QuotaExceeded as e:
