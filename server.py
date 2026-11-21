@@ -29,6 +29,7 @@ from utils import custom_providers
 from utils.logger import get_logger
 from utils.prefs import load_prefs, save_prefs
 from utils.env_file import update_env
+from utils.atomic_file import atomic_write
 
 logger = get_logger(__name__)
 
@@ -712,8 +713,8 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
         task["progress"] = 90
         log("save", "💾 正在保存报告...", 90)
 
-        safe_topic = re.sub(r"[\\/:*?\"<>|]", "_", req.topic)[:20]
-        fname = f"研究报告_{safe_topic}_{datetime.datetime.now():%Y%m%d_%H%M}.md"
+        safe_topic = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", req.topic)[:20].strip(" .") or "调研"
+        fname = f"研究报告_{safe_topic}_{datetime.datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:12]}.md"
         ref_list = "\n".join(_ref_citation(i, r) for i, r in enumerate(refs, 1))
         report_md = (
             f"# {req.topic} 文献调研报告\n\n"
@@ -724,8 +725,7 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
             "## 参考文献\n\n"
             f"{ref_list}\n"
         )
-        with open(os.path.join(REPORT_DIR, fname), "w", encoding="utf-8") as f:
-            f.write(report_md)
+        atomic_write(os.path.join(REPORT_DIR, fname), report_md)
         task["report"] = report_md
         task["report_file"] = fname
         task["status"] = "done"

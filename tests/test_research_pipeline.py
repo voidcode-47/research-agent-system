@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """文献调研流水线：检索参考文献 → 生成综合报告（进度 / 降级 / 失败保留文献）。"""
 import os
+import datetime
+from pathlib import Path
 
 import pytest
 
@@ -209,3 +211,34 @@ def test_worker_discards_report_when_cancelled_during_llm(env, monkeypatch):
     assert task["report"] is None
     assert task["report_file"] is None
     assert any("已取消" in log for log in task["logs"])
+
+
+def test_reports_with_same_topic_and_timestamp_keep_separate_files(env, monkeypatch):
+    class FixedDateTime(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 21, 12, 0)
+
+    monkeypatch.setattr(server.datetime, "datetime", FixedDateTime)
+    _patch_refs(monkeypatch)
+    files = []
+    for i in range(2):
+        _patch_llm(monkeypatch, f"## Report {i}\n" + f"Evidence {i}. " * 30)
+        task_id = f"report_{i}"
+        server.RESEARCH_TASKS[task_id] = server.RESEARCH_TASKS.pop(_new_task())
+        server._run_research_worker(task_id, ResearchRequest(topic=TOPIC))
+        task = server.RESEARCH_TASKS[task_id]
+        assert task["status"] == "done"
+        files.append(task["report_file"])
+
+    assert len(set(files)) == 2
+    for i, filename in enumerate(files):
+        assert f"Evidence {i}." in (Path(env) / filename).read_text(encoding="utf-8")
+
+
+def test_report_filename_handles_control_characters(env, monkeypatch):
+    _patch_refs(monkeypatch)
+    _patch_llm(monkeypatch, "## Report\n" + "Evidence. " * 30)
+    task_id = _new_task()
+    server._run_research_worker(task_id, ResearchRequest(topic="topic\x00\nname"))
+    assert server.RESEARCH_TASKS[task_id]["status"] == "done"
