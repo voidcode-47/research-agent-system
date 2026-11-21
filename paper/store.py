@@ -30,6 +30,8 @@ _ID_RE = re.compile(r"^p_[0-9a-f]{12}$")
 _ANALYSIS_DIMS = ("level", "feasibility", "format", "deai")
 _ARCHIVE_NAME = "archive.json.gz"
 _ARCHIVE_FORMAT = 1
+_HISTORY_NAME = "history.json"
+_HISTORY_LIMIT = 200
 
 _LOCK = threading.RLock()
 
@@ -171,7 +173,9 @@ def load_meta(paper_id: str) -> dict:
 
 
 def save_parsed(paper_id: str, parsed: dict) -> None:
-    _write_json(os.path.join(paper_dir(paper_id), "parsed.json"), parsed)
+    with _LOCK:
+        load_meta(paper_id)
+        _write_json(os.path.join(paper_dir(paper_id), "parsed.json"), parsed)
 
 
 def load_parsed(paper_id: str) -> dict:
@@ -184,13 +188,10 @@ def load_parsed(paper_id: str) -> dict:
 def save_requirement(paper_id: str, requirement: dict) -> None:
     pid = validate_paper_id(paper_id)
     with _LOCK:
+        meta = load_meta(pid)
         _write_json(os.path.join(paper_dir(pid), "requirement.json"), requirement)
-        try:
-            meta = load_meta(pid)
-            meta["status"] = "confirmed" if requirement.get("confirmed") else "uploaded"
-            save_meta(pid, meta)
-        except FileNotFoundError:
-            pass
+        meta["status"] = "confirmed" if requirement.get("confirmed") else "uploaded"
+        save_meta(pid, meta)
         mark_analysis_stale(pid)
 
 
@@ -203,7 +204,9 @@ def save_analysis(paper_id: str, dimension: str, data: dict) -> None:
     if dimension not in _ANALYSIS_DIMS:
         raise ValueError(f"未知诊断维度：{dimension}")
     path = os.path.join(paper_dir(paper_id), "analysis", f"{dimension}.json")
-    _write_json(path, data)
+    with _LOCK:
+        load_meta(paper_id)
+        _write_json(path, data)
 
 
 def analysis_snapshot_matches(paper_id: str, version: int,
@@ -230,7 +233,71 @@ def save_analysis_if_current(paper_id: str, dimension: str, data: dict,
             return False
         path = os.path.join(paper_dir(pid), "analysis", f"{dimension}.json")
         _write_json(path, data)
+        append_analysis_history(pid, _history_entry(dimension, version, data))
         return True
+
+
+def _history_path(paper_id: str) -> str:
+    return os.path.join(paper_dir(paper_id), "analysis", _HISTORY_NAME)
+
+
+def _history_key(item: dict) -> tuple:
+    return (item.get("dimension"), item.get("version"),
+            item.get("generated_at"), item.get("score"))
+
+
+def _history_entry(dimension: str, version: int, data: dict) -> dict:
+    """把维度结果压缩成趋势所需的最小字段，非 deai 不写 AI 相关键。"""
+    entry = {
+        "dimension": dimension,
+        "version": int(version or 0),
+        "generated_at": str(data.get("generated_at") or ""),
+        "score": data.get("score"),
+    }
+    for key in ("ai_rate", "ai_score", "paragraph_risk"):
+        if data.get(key) is not None:
+            entry[key] = data[key]
+    return entry
+
+
+def append_analysis_history(paper_id: str, record: dict) -> None:
+    """追加一条诊断历史；重复记录跳过，只保留最近 _HISTORY_LIMIT 条。"""
+    if not isinstance(record, dict) or not record.get("dimension"):
+        return
+    pid = validate_paper_id(paper_id)
+    with _LOCK:
+        path = _history_path(pid)
+        items = _read_json(path, [])
+        if not isinstance(items, list):
+            items = []
+        entry = {
+            "dimension": str(record.get("dimension")),
+            "version": int(record.get("version") or 0),
+            "generated_at": str(record.get("generated_at") or ""),
+            "score": record.get("score"),
+        }
+        for key in ("ai_rate", "ai_score", "paragraph_risk"):
+            if record.get(key) is not None:
+                entry[key] = record[key]
+        key = _history_key(entry)
+        if any(isinstance(it, dict) and _history_key(it) == key for it in items):
+            return
+        items.append(entry)
+        _write_json(path, items[-_HISTORY_LIMIT:])
+
+
+def load_analysis_history(paper_id: str, limit: int = 40) -> list[dict]:
+    """读取最近 limit 条诊断历史；缺失或损坏时返回空列表。"""
+    try:
+        items = _read_json(_history_path(paper_id), [])
+    except ValueError:
+        return []
+    if not isinstance(items, list):
+        return []
+    rows = [it for it in items if isinstance(it, dict)]
+    if limit and limit > 0:
+        rows = rows[-limit:]
+    return rows
 
 
 def load_analysis(paper_id: str, dimension: str) -> dict | None:
@@ -284,8 +351,7 @@ def mark_analysis_stale(paper_id: str) -> int:
 def save_similar(paper_id: str, data: dict) -> None:
     pid = validate_paper_id(paper_id)
     with _LOCK:
-        if not os.path.isdir(paper_dir(pid)):
-            raise FileNotFoundError("论文不存在")
+        load_meta(pid)
         _write_json(os.path.join(paper_dir(pid), "similar.json"), data)
 
 
@@ -295,7 +361,9 @@ def load_similar(paper_id: str) -> dict | None:
 
 
 def save_rewrite_guide(paper_id: str, data: dict) -> None:
-    _write_json(os.path.join(paper_dir(paper_id), "rewrite_guide.json"), data)
+    with _LOCK:
+        load_meta(paper_id)
+        _write_json(os.path.join(paper_dir(paper_id), "rewrite_guide.json"), data)
 
 
 def load_rewrite_guide(paper_id: str) -> dict | None:
@@ -379,6 +447,7 @@ def _merge_version_entries(paper_id: str) -> list[dict]:
 def save_version(paper_id: str, paragraphs: list, note: str = "") -> int:
     pid = validate_paper_id(paper_id)
     with _LOCK:
+        load_meta(pid)
         create_paper_dir(pid)
         existing = set(_loose_version_numbers(pid))
         existing.update(_load_version_archive(pid))
@@ -505,23 +574,70 @@ def current_paragraphs(paper_id: str) -> list[dict]:
     return snapshot_current(paper_id)[1]
 
 
+_CURRENT_CACHE: dict[tuple, dict] = {}
+_CURRENT_CACHE_MAX = 16
+
+
+def _file_stamp(path: str):
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _remember_current(key: tuple, value: dict) -> None:
+    if len(_CURRENT_CACHE) >= _CURRENT_CACHE_MAX:
+        _CURRENT_CACHE.pop(next(iter(_CURRENT_CACHE)), None)
+    _CURRENT_CACHE[key] = value
+
+
 def current_parsed(paper_id: str) -> dict:
-    """读取当前版本的正文和摘要，保留上传时的 parsed.json 与原始版本。"""
+    """读取当前版本的正文和摘要，保留上传时的 parsed.json 与原始版本。
+
+    结果按 (数据目录, 版本号, 文件时间戳) 缓存在进程内；返回值是只读视图，
+    调用方不得原地修改。
+    """
     from paper.parser import _extract_abstract, _extract_keywords
 
     with _LOCK:
+        pdir = paper_dir(paper_id)
+        meta = load_meta(paper_id)
+        n = int(meta.get("current_version") or 0)
+        if not n:
+            return load_parsed(paper_id)
+        key = (
+            pdir,
+            n,
+            _file_stamp(os.path.join(pdir, "parsed.json")),
+            _file_stamp(_version_path(paper_id, n)),
+            _file_stamp(_archive_path(paper_id)),
+        )
+        cached = _CURRENT_CACHE.get(key)
+        if cached is not None:
+            return cached
         parsed = load_parsed(paper_id)
-        if not load_meta(paper_id).get("current_version"):
-            return parsed
-        paragraphs = current_paragraphs(paper_id)
+        try:
+            paragraphs = load_version(paper_id, n).get("paragraphs") or []
+        except FileNotFoundError:
+            paragraphs = parsed.get("paragraphs") or []
         full_text = "\n".join(p.get("text") or "" for p in paragraphs)
-        return {
+        result = {
             **parsed,
             "paragraphs": paragraphs,
             "text_chars": len(re.sub(r"\s", "", full_text)),
             "abstract": _extract_abstract(parsed.get("sections") or [], paragraphs, full_text),
             "keywords": _extract_keywords(paragraphs),
         }
+        _remember_current(key, result)
+        return result
+
+
+def current_snapshot(paper_id: str) -> tuple[int, dict]:
+    """在同一把锁内返回当前版本号与正文视图，避免版本号/正文错配。"""
+    with _LOCK:
+        n = int(load_meta(paper_id).get("current_version") or 0)
+        return n, current_parsed(paper_id)
 
 
 # ---------------------------------------------------------------------------
@@ -654,9 +770,11 @@ def delete_paper(paper_id: str) -> bool:
     pid = validate_paper_id(paper_id)
     with _LOCK:
         path = paper_dir(pid)
-        if not os.path.isdir(path):
-            return False
-        shutil.rmtree(path)
+        existed = os.path.isdir(path)
+        if existed:
+            shutil.rmtree(path)
+        for cache_key in [key for key in _CURRENT_CACHE if key[0] == path]:
+            _CURRENT_CACHE.pop(cache_key, None)
         items = [m for m in _load_index() if m.get("id") != pid]
         _write_json(_index_path(), items)
-        return True
+        return existed

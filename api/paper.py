@@ -14,6 +14,7 @@ import re
 import shutil
 import tempfile
 import threading
+import traceback
 import uuid
 from urllib.parse import quote
 
@@ -43,6 +44,9 @@ from config.settings import settings
 from llm.factory import LLMFactory
 from llm.gateway import LLMGateway
 from paper import backup, store
+from paper import inputs as paper_inputs
+from paper import contracts
+from paper import references
 from paper.analysis import DiagnosisCancelled, DiagnosisStale, diagnose, total_score
 from paper.chunks import build_qa_context
 from paper.export import export_docx, export_pdf, export_summary_docx
@@ -143,6 +147,10 @@ class ApplyBody(BaseModel):
 
 
 class ApplyBatchBody(BaseModel):
+    items: list[ApplyBody] = Field(default_factory=list)
+
+
+class ReferenceApplyBody(BaseModel):
     items: list[ApplyBody] = Field(default_factory=list)
 
 
@@ -803,6 +811,9 @@ def _upload_worker(task_id: str, paper_id: str, paper_dir: str,
     def cancelled() -> bool:
         return bool(task.get("cancel_requested"))
 
+    cancelled_flag = False
+    failure = ""
+    details = ""
     try:
         if cancelled():
             raise ParseCancelled("解析已取消")
@@ -851,13 +862,20 @@ def _upload_worker(task_id: str, paper_id: str, paper_dir: str,
             }
             _finish(task, "done", progress=100,
                     message=f"解析完成：{parsed['title']}", report=report)
+        return
     except ParseCancelled:
-        shutil.rmtree(paper_dir, ignore_errors=True)
-        _finish(task, "cancelled", message="已取消上传解析，未保存该论文")
+        cancelled_flag = True
     except Exception as e:
-        shutil.rmtree(paper_dir, ignore_errors=True)
-        logger.exception("论文解析失败")
-        _fail(task, e)
+        failure = str(e) or type(e).__name__
+        details = traceback.format_exc()
+    # 异常对象在 except 块内仍持有解析器的 PDF 句柄（Windows 下文件被占用），
+    # 离开 except 后再清理目录，避免残留无法删除的论文目录。
+    store.delete_paper(paper_id)
+    if cancelled_flag:
+        _finish(task, "cancelled", message="已取消上传解析，未保存该论文")
+    else:
+        logger.error("论文解析失败：%s\n%s", failure, details)
+        _fail(task, RuntimeError(failure))
 
 
 @router.post("/upload")
@@ -980,6 +998,7 @@ def api_paper_detail(paper_id: str):
         "analyzed": {d: store.has_analysis(paper_id, d) for d in DIAGNOSIS_DIMENSIONS},
         "analysis": analysis,
         "analysis_results": analysis_results,
+        "analysis_history": store.load_analysis_history(paper_id, limit=40),
         "total_score": total_score(paper_id),
         "version_count": len(versions),
         "archived_count": sum(1 for v in versions if v.get("archived")),
@@ -1017,6 +1036,54 @@ def api_paragraphs(paper_id: str, section: str = ""):
         "paragraphs": selected,
         "tables": parsed.get("tables") or [],
     }
+
+
+@router.get("/{paper_id}/references")
+def api_references(paper_id: str):
+    """本地检查参考文献一致性与 GB/T 7714 著录要素，无 LLM 开销。"""
+    _paper_or_404(paper_id)
+    paragraphs = store.current_paragraphs(paper_id)
+    req = store.load_requirement(paper_id) or {}
+    result = references.analyze(paragraphs, req.get("format") or {})
+    return {
+        **result,
+        "paper_id": paper_id,
+        "current_version": store.current_version(paper_id),
+    }
+
+
+@router.post("/{paper_id}/references/apply")
+def api_apply_references(paper_id: str, body: ReferenceApplyBody):
+    """把一个或多个参考文献条目的规范化结果原子保存为新版本。"""
+    _paper_or_404(paper_id)
+    if not body.items:
+        raise HTTPException(400, "没有可保存的规范化条目")
+    if len(body.items) > references.MAX_ENTRIES:
+        raise HTTPException(400, f"一次最多保存 {references.MAX_ENTRIES} 条参考文献")
+    ref_ids = {
+        p.get("id") for p in store.current_paragraphs(paper_id)
+        if p.get("type") == "reference"
+    }
+    items = []
+    for item in body.items:
+        if item.paragraph_id not in ref_ids:
+            raise HTTPException(400, f"{item.paragraph_id} 不是参考文献条目")
+        items.append({
+            "paragraph_id": item.paragraph_id,
+            "revised": item.revised,
+            "expected_original": item.expected_original,
+        })
+    try:
+        return apply_rewrites(
+            paper_id, items, note="规范化参考文献著录格式",
+            max_items=references.MAX_ENTRIES,
+        )
+    except store.VersionConflict as e:
+        return _conflict_response(e)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/{paper_id}/tables")
@@ -1083,7 +1150,13 @@ def api_put_requirement(paper_id: str, body: RequirementBody):
         "confirmed": True,
         "updated_at": _now(),
     }
-    store.save_requirement(paper_id, requirement)
+    try:
+        contracts.validate(requirement, contracts.Requirement, "需求")
+        store.save_requirement(paper_id, requirement)
+    except FileNotFoundError:
+        raise HTTPException(404, "论文已删除")
+    except ValueError as error:
+        raise HTTPException(400, str(error))
     return {
         "ok": True,
         "requirement": requirement,
@@ -1095,7 +1168,7 @@ def api_put_requirement(paper_id: str, body: RequirementBody):
 # ---------------------------------------------------------------------------
 # 诊断任务
 # ---------------------------------------------------------------------------
-def _diagnose_worker(task_id: str, paper_id: str, dimensions: list[str]) -> None:
+def _diagnose_worker(task_id: str, paper_id: str, dimensions: list[str], inputs=None) -> None:
     task = PAPER_TASKS[task_id]
     partial = {}
 
@@ -1114,10 +1187,12 @@ def _diagnose_worker(task_id: str, paper_id: str, dimensions: list[str]) -> None
 
     try:
         _log(task, "init", "正在加载论文与需求...")
-        llm = _create_llm()
+        inputs = inputs or paper_inputs.capture(paper_id, _create_llm())
+        llm = inputs["llm"]
         report = diagnose(
             paper_id, llm, dimensions, progress=progress,
             should_cancel=lambda: bool(task.get("cancel_requested")),
+            snapshot=inputs,
         )
         if report.get("errors") and not report.get("dimensions"):
             # 所有维度都失败：任务标记为失败，前端直接展示原因（如配额耗尽）
@@ -1150,9 +1225,10 @@ def api_start_diagnose(paper_id: str, body: DiagnoseBody, request: Request):
     bad = [d for d in dims if d not in DIAGNOSIS_DIMENSIONS]
     if bad:
         raise HTTPException(400, f"未知诊断维度：{', '.join(bad)}")
-    key = "diagnose:" + ",".join(sorted(dims))
+    inputs = paper_inputs.capture(paper_id, _create_llm())
+    key = "diagnose:" + ",".join(sorted(dims)) + ":" + inputs["fingerprint"]
     task_id = _launch(
-        "diagnose", paper_id, key, _diagnose_worker, dims,
+        "diagnose", paper_id, key, _diagnose_worker, dims, inputs,
         quota_amount=sum(d != "format" for d in set(dims)),
         quota_unlimited=bool(getattr(request.state, "admin_user", "")),
     )
@@ -1261,12 +1337,16 @@ def api_get_guideline(paper_id: str):
     return {
         "guideline": guide,
         "cached": True,
-        "stale": int(guide.get("version") or 0) != current,
+        "stale": not paper_inputs.guide_current(guide, {
+            "version": current,
+            "body_fingerprint": paper_inputs.fingerprint(store.current_parsed(paper_id)),
+            "requirement_fingerprint": paper_inputs.requirement_fingerprint(store.load_requirement(paper_id) or {}),
+        }),
         "current_version": current,
     }
 
 
-def _commit_guideline(task: dict, paper_id: str, guide: dict) -> bool:
+def _commit_guideline(task: dict, paper_id: str, guide: dict, inputs=None) -> bool:
     """在任务锁内完成取消检查、落盘与终态迁移，避免取消与完成互相覆盖。"""
     with _TASK_LOCK:
         if task.get("status") in _TERMINAL:
@@ -1275,7 +1355,10 @@ def _commit_guideline(task: dict, paper_id: str, guide: dict) -> bool:
             _finish(task, "cancelled", message="已取消生成，本次结果不保存")
             return False
         try:
-            store.save_rewrite_guide(paper_id, guide)
+            with store.locked():
+                if inputs and not paper_inputs.matches(paper_id, inputs):
+                    raise ValueError("论文或需求已变化，旧方针未保存，请重新生成")
+                store.save_rewrite_guide(paper_id, guide)
         except Exception as e:
             logger.exception("全局改写方针保存失败")
             _fail(task, e)
@@ -1286,7 +1369,7 @@ def _commit_guideline(task: dict, paper_id: str, guide: dict) -> bool:
 
 
 def _guideline_worker(task_id: str, paper_id: str, instruction: str,
-                      version: int) -> None:
+                      version: int, inputs=None) -> None:
     task = PAPER_TASKS[task_id]
 
     def progress(percent: int, message: str) -> None:
@@ -1296,9 +1379,10 @@ def _guideline_worker(task_id: str, paper_id: str, instruction: str,
         _log(task, "running", message)
 
     try:
-        parsed = store.load_parsed(paper_id)
-        paragraphs = store.current_paragraphs(paper_id)
-        requirement = store.load_requirement(paper_id) or {}
+        inputs = inputs or paper_inputs.capture(paper_id, _create_llm())
+        parsed = inputs["parsed"]
+        paragraphs = inputs["paragraphs"]
+        requirement = inputs["requirement"]
         # 单次模型调用可能持续数分钟：等待期间缓慢推进进度并给出等待提示
         stop_tick = threading.Event()
 
@@ -1317,16 +1401,18 @@ def _guideline_worker(task_id: str, paper_id: str, instruction: str,
         threading.Thread(target=tick, daemon=True).start()
         try:
             guide = generate_guideline(
-                _create_llm(), parsed, requirement, paragraphs,
+                inputs["llm"], parsed, requirement, paragraphs,
                 paper_id=paper_id,
-                version=version,
+                version=inputs["version"],
                 instruction=instruction,
                 progress=progress,
                 should_cancel=lambda: bool(task.get("cancel_requested")),
             )
         finally:
             stop_tick.set()
-        _commit_guideline(task, paper_id, guide)
+        guide.update({name: inputs[name] for name in (
+            "body_fingerprint", "requirement_fingerprint", "model_fingerprint")})
+        _commit_guideline(task, paper_id, guide, inputs)
     except quota.QuotaExceeded as e:
         _fail(task, e, cancel_wins=True,
               cancel_message="已取消生成，本次结果不保存")
@@ -1344,10 +1430,12 @@ def api_generate_guideline(paper_id: str, body: GuidelineBody, request: Request)
         g = gate(instruction, True)
         if not g["allowed"]:
             raise HTTPException(400, g["reply"])
-    key = "guideline:" + instruction
+    inputs = paper_inputs.capture(paper_id, _create_llm())
+    key = "guideline:" + instruction + ":" + inputs["fingerprint"]
     task_id = _launch(
         "guideline", paper_id, key, _guideline_worker, instruction,
         int(meta.get("current_version") or 0),
+        inputs,
         quota_amount=1,
         quota_unlimited=bool(getattr(request.state, "admin_user", "")),
     )
@@ -1385,7 +1473,7 @@ def _rewrite_target(paper_id: str, paragraph_id: str) -> tuple[int, dict]:
 
 
 def _rewrite_worker(task_id: str, paper_id: str, paragraph_id: str, mode: str,
-                    instruction: str, use_guideline: bool) -> None:
+                    instruction: str, use_guideline: bool, inputs=None) -> None:
     task = PAPER_TASKS[task_id]
 
     def cancelled() -> bool:
@@ -1396,13 +1484,15 @@ def _rewrite_worker(task_id: str, paper_id: str, paragraph_id: str, mode: str,
         task["progress"] = 10
         if cancelled():
             raise RuntimeError("__cancelled__")
-        version, target = _rewrite_target(paper_id, paragraph_id)
-        requirement = store.load_requirement(paper_id) or {}
-        guide = store.load_rewrite_guide(paper_id) if use_guideline else None
+        inputs = inputs or paper_inputs.capture(paper_id, _create_llm())
+        version = inputs["version"]
+        target = next(p for p in inputs["paragraphs"] if p.get("id") == paragraph_id)
+        requirement = inputs["requirement"]
+        guide = paper_inputs.usable_guide(inputs, use_guideline)
         task["progress"] = 30
         _log(task, "rewrite", "模型正在改写该段落…")
         result = rewrite_paragraph(
-            _create_llm(), target.get("text") or "", requirement,
+            inputs["llm"], target.get("text") or "", requirement,
             mode=mode, instruction=instruction, paper_id=paper_id,
             guideline=guideline_text(guide) if guide else "", version=version,
         )
@@ -1442,16 +1532,23 @@ def api_rewrite(paper_id: str, body: RewriteBody, request: Request):
     if not g["allowed"]:
         raise HTTPException(400, g["reply"])
 
+    inputs = paper_inputs.capture(paper_id, _create_llm())
+    try:
+        paper_inputs.usable_guide(inputs, body.use_guideline)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
     key = "rewrite:" + "|".join([
         body.paragraph_id,
         body.mode,
         body.instruction or "",
         str(int(bool(body.use_guideline))),
+        inputs["fingerprint"],
     ])
     task_id = _launch(
         "rewrite", paper_id, key, _rewrite_worker,
         body.paragraph_id, body.mode, body.instruction,
         bool(body.use_guideline),
+        inputs,
         quota_amount=1,
         quota_unlimited=bool(getattr(request.state, "admin_user", "")),
     )
@@ -1478,7 +1575,7 @@ def api_rewrite_cancel(paper_id: str, task_id: str):
 
 
 def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
-                  mode: str, instruction: str, use_guideline: bool) -> None:
+                  mode: str, instruction: str, use_guideline: bool, inputs=None) -> None:
     task = PAPER_TASKS[task_id]
     items: list[dict] = []
     errors: list[dict] = []
@@ -1490,12 +1587,13 @@ def _batch_worker(task_id: str, paper_id: str, paragraph_ids: list[str],
     try:
         _log(task, "init", f"批量改写 {total} 个段落…")
         task["progress"] = 5
-        version, snapshot = store.snapshot_current(paper_id)
+        inputs = inputs or paper_inputs.capture(paper_id, _create_llm())
+        version, snapshot = inputs["version"], inputs["paragraphs"]
         paragraphs = {p.get("id"): p for p in snapshot}
-        requirement = store.load_requirement(paper_id) or {}
-        guide = store.load_rewrite_guide(paper_id) if use_guideline else None
+        requirement = inputs["requirement"]
+        guide = paper_inputs.usable_guide(inputs, use_guideline)
         guide_text = guideline_text(guide) if guide else ""
-        llm = _create_llm()
+        llm = inputs["llm"]
         quota_stop = threading.Event()
 
         def rewrite_one(pid):
@@ -1569,15 +1667,22 @@ def api_rewrite_batch(paper_id: str, body: RewriteBatchBody, request: Request):
     if not g["allowed"]:
         raise HTTPException(400, g["reply"])
 
+    inputs = paper_inputs.capture(paper_id, _create_llm())
+    try:
+        paper_inputs.usable_guide(inputs, body.use_guideline)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
     key = "batch:" + "|".join([
         ",".join(sorted(ids)),
         body.mode,
         body.instruction or "",
         str(int(bool(body.use_guideline))),
+        inputs["fingerprint"],
     ])
     task_id = _launch(
         "rewrite_batch", paper_id, key, _batch_worker, ids, body.mode,
         body.instruction, bool(body.use_guideline),
+        inputs,
         quota_amount=len(ids),
         quota_unlimited=bool(getattr(request.state, "admin_user", "")),
     )
@@ -1680,7 +1785,7 @@ def api_backup(paper_id: str):
 # 导出 / 删除 / 问答
 # ---------------------------------------------------------------------------
 @router.get("/{paper_id}/export")
-def api_export(paper_id: str, format: str = "docx"):
+def api_export(paper_id: str, format: str = "docx", tracked: bool = False):
     meta = _paper_or_404(paper_id)
     fmt = (format or "docx").lower()
     if fmt not in ("docx", "pdf", "summary"):
@@ -1721,14 +1826,15 @@ def api_export(paper_id: str, format: str = "docx"):
             headers={"Content-Disposition": _attachment_header(f"{stem}_优化版.pdf")},
         )
     try:
-        buf = export_docx(paper_id, paragraphs, requirement, tables)
+        buf = export_docx(paper_id, paragraphs, requirement, tables, tracked=tracked)
     except Exception as e:
         logger.exception("Word 导出失败")
         raise HTTPException(500, f"Word 导出失败：{e}")
+    filename = f"{stem}_修订版.docx" if tracked else f"{stem}_优化版.docx"
     return Response(
         content=buf.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": _attachment_header(f"{stem}_优化版.docx")},
+        headers={"Content-Disposition": _attachment_header(filename)},
     )
 
 
@@ -1765,9 +1871,20 @@ def api_ask(paper_id: str, body: AskBody):
     if not g["allowed"]:
         return {"answer": g["reply"], "basis": [], "evidence": [], "rejected": True}
 
-    parsed = store.current_parsed(paper_id)
+    version, parsed = store.current_snapshot(paper_id)
     budget = int(getattr(settings, "PAPER_QA_CONTEXT_CHARS", 3600) or 3600)
-    context, evidence = build_qa_context(parsed, question, budget)
+    context, evidence = build_qa_context(
+        parsed, question, budget, cache_key=(store.paper_dir(paper_id), version)
+    )
+    candidates = {item["id"]: item for item in evidence}
+
+    def valid_answer(data):
+        if not isinstance(data, dict) or not isinstance(data.get("answer"), str):
+            return False
+        basis = data.get("basis")
+        return (bool(data["answer"].strip()) and len(data["answer"]) <= 20_000
+                and isinstance(basis, list) and len(basis) <= len(candidates)
+                and all(isinstance(source, str) and source in candidates for source in basis))
     system = PAPER_QA_PROMPT
     user = (
         f"<paper_text>\n{context}\n</paper_text>\n\n"
@@ -1779,7 +1896,7 @@ def api_ask(paper_id: str, body: AskBody):
             "paper_qa",
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             paper_id=paper_id,
-            validator=lambda d: isinstance(d, dict) and bool(str(d.get("answer") or "").strip()),
+            validator=valid_answer,
         )
     except quota.QuotaExceeded as e:
         raise HTTPException(429, str(e))
@@ -1788,7 +1905,9 @@ def api_ask(paper_id: str, body: AskBody):
         raise HTTPException(500, f"论文问答失败：{e}")
     return {
         "answer": str(data.get("answer") or ""),
-        "basis": [item["id"] for item in evidence],
-        "evidence": evidence,
+        "basis": list(dict.fromkeys(data["basis"])),
+        "evidence": [candidates[source] for source in dict.fromkeys(data["basis"])],
+        "retrieved_candidates": evidence,
+        "evidence_status": "cited" if data["basis"] else "insufficient",
         "rejected": False,
     }

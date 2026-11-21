@@ -210,11 +210,13 @@ def test_tasks_use_adopted_paragraphs_and_preserve_original(env, tmp_path, task)
     assert applied.status_code == 200
 
     if task == "ask":
+        # 该用例验证检索使用已采纳正文；引用集合与检索候选分离，允许模型不引用。
+        env.payload["basis"] = []
         response = client.post(f"/api/paper/{pid}/ask", json={"question": "论文用了什么方法？"})
     else:
         response = client.post(f"/api/paper/{pid}/diagnose", json={"dimensions": ["level"]})
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert env.calls
     context = env.calls[-1][-1]["content"]
     assert revised in context
@@ -403,6 +405,18 @@ def test_diagnose_end_to_end_and_stale(env, tmp_path):
     assert detail["analysis_results"]["format"]["score_source"] == "rules:format_rules"
     assert detail["analysis"]["format"]["stale"] is False
     assert detail["total_score"] == report["total_score"]
+
+    risks = deai["paragraph_risks"]
+    assert risks
+    assert all({"index", "paragraph_id", "page", "risk", "risk_points", "hits"} <= set(r)
+               for r in risks)
+    assert any(r["paragraph_id"] for r in risks)
+    history = detail["analysis_history"]
+    assert len(history) == 4
+    deai_history = [h for h in history if h["dimension"] == "deai"]
+    assert len(deai_history) == 1
+    assert deai_history[0]["ai_rate"] == deai["ai_rate"]
+    assert deai_history[0]["version"] == 0
 
     again = _confirm(pid)
     assert again.status_code == 200
@@ -683,6 +697,31 @@ def test_legacy_deai_analysis_marked_stale(env, tmp_path):
     assert store.has_analysis(pid, "deai") is False
 
 
+def test_analysis_history_dedupes_and_caps(env):
+    """相同记录不重复写入，历史总量限制为最近 200 条。"""
+    pid = store.new_paper_id()
+    store.create_paper_dir(pid)
+    record = {
+        "dimension": "deai", "version": 0, "generated_at": "2026-01-01 00:00:00",
+        "score": 70, "ai_rate": 30, "ai_score": 30,
+        "paragraph_risk": {"high": 1, "medium": 2},
+    }
+    store.append_analysis_history(pid, record)
+    store.append_analysis_history(pid, record)
+    assert len(store.load_analysis_history(pid)) == 1
+
+    for i in range(205):
+        store.append_analysis_history(pid, {
+            "dimension": "deai", "version": i + 1,
+            "generated_at": f"2026-01-01 00:{i // 60:02d}:{i % 60:02d}",
+            "score": 60 + i % 10, "ai_rate": 40,
+        })
+    rows = store.load_analysis_history(pid, limit=500)
+    assert len(rows) == 200
+    assert rows[-1]["version"] == 205
+    assert len(store.load_analysis_history(pid, limit=10)) == 10
+
+
 # ---------- 相似论文 ----------
 def test_similar_reuses_search_and_caches(env, tmp_path, monkeypatch):
     pid = _upload_ok(tmp_path)
@@ -771,6 +810,13 @@ def test_rewrite_apply_and_export(env, tmp_path):
     document = docx.Document(io.BytesIO(exp.content))
     text = "\n".join(p.text for p in document.paragraphs)
     assert result["revised"] in text
+
+    tracked = client.get(f"/api/paper/{pid}/export?format=docx&tracked=true")
+    assert tracked.status_code == 200
+    tracked_doc = docx.Document(io.BytesIO(tracked.content))
+    tracked_xml = tracked_doc.element.xml
+    assert "<w:ins" in tracked_xml and "<w:del" in tracked_xml
+    assert result["revised"] in tracked_xml and result["original"] in tracked_xml
 
     exp_pdf = client.get(f"/api/paper/{pid}/export?format=pdf")
     assert exp_pdf.status_code == 200
@@ -1192,16 +1238,18 @@ def _upload_docx(tmp_path):
 
 def test_ask_and_rejection(env, tmp_path):
     pid = _upload_ok(tmp_path)
+    method_id = next(
+        p["id"] for p in client.get(f"/api/paper/{pid}/paragraphs").json()["paragraphs"]
+        if "taxonomy" in p["text"]
+    )
+    env.payload["basis"] = [method_id]
     r = client.post(f"/api/paper/{pid}/ask", json={"question": "What method is used?"})
     assert r.status_code == 200
     body = r.json()
     assert body["rejected"] is False
     assert body["answer"] == env.payload["answer"]
-    assert body["basis"], body
-    method_id = next(
-        p["id"] for p in client.get(f"/api/paper/{pid}/paragraphs").json()["paragraphs"]
-        if "taxonomy" in p["text"]
-    )
+    assert body["basis"] == [method_id], body
+    assert method_id in [item["id"] for item in body["retrieved_candidates"]]
     assert method_id in body["basis"]
     assert body["evidence"][0]["kind"] == "paragraph"
     assert body["evidence"][0]["id"] == method_id
@@ -1237,6 +1285,7 @@ def test_tables_exposed_and_ask_returns_table_evidence(env, tmp_path):
     listed = client.get(f"/api/paper/{pid}/tables").json()["tables"]
     assert [t["id"] for t in listed] == ["t_0001"]
 
+    env.payload["basis"] = ["t_0001"]
     ask = client.post(f"/api/paper/{pid}/ask",
                       json={"question": "消融实验的准确率是多少"}).json()
     assert "t_0001" in ask["basis"]
@@ -1264,12 +1313,13 @@ def test_old_paper_without_tables_still_answerable(env, tmp_path):
 
     assert client.get(f"/api/paper/{pid}/tables").json()["tables"] == []
     assert client.get(f"/api/paper/{pid}/paragraphs").json()["tables"] == []
-    body = client.post(f"/api/paper/{pid}/ask",
-                       json={"question": "What method is used?"}).json()
     method_id = next(
         p["id"] for p in client.get(f"/api/paper/{pid}/paragraphs").json()["paragraphs"]
         if "taxonomy" in p["text"]
     )
+    env.payload["basis"] = [method_id]
+    body = client.post(f"/api/paper/{pid}/ask",
+                       json={"question": "What method is used?"}).json()
     assert method_id in body["basis"]
     assert body["evidence"][0]["kind"] == "paragraph"
 
@@ -1346,6 +1396,60 @@ def test_new_task_rejected_while_paper_is_deleting(env, tmp_path):
         and task.get("status") not in api_paper._TERMINAL
         for task in api_paper.PAPER_TASKS.values()
     )
+
+
+# ---------- 参考文献检查与规范化 ----------
+def test_references_check_and_normalize(env, tmp_path):
+    lines = [
+        "Deep Learning for Software Testing",
+        "",
+        "Abstract",
+        "This paper reviews deep learning methods for software testing.",
+        "Keywords: deep learning, software testing",
+        "",
+        "1 Introduction",
+        "Software testing is important and widely studied [1].",
+        "",
+        "References",
+        "[1] Smith J.  A survey of testing[j]. Journal of Software, 2020, 12(3): 1-10",
+    ]
+    path = _make_pdf(tmp_path / "refs.pdf", lines=lines)
+    response = client.post(
+        "/api/paper/upload",
+        files={"file": ("refs.pdf", path.read_bytes(), "application/pdf")},
+    )
+    pid = _upload_report(response)["paper_id"]
+    _confirm(pid)
+
+    data = client.get(f"/api/paper/{pid}/references").json()
+    assert data["stats"]["references"] >= 1
+    entry = next(e for e in data["entries"] if "survey" in e["text"].lower())
+    assert entry["changed"] is True
+    assert entry["normalized"].startswith("[1] ")
+    assert "[J]" in entry["normalized"]
+    assert entry["normalized"].endswith(".")
+    assert entry["cited"] is True
+
+    applied = client.post(f"/api/paper/{pid}/references/apply", json={"items": [{
+        "paragraph_id": entry["paragraph_id"],
+        "revised": entry["normalized"],
+        "expected_original": entry["text"],
+    }]})
+    assert applied.status_code == 200, applied.text
+    paragraphs = client.get(f"/api/paper/{pid}/paragraphs").json()["paragraphs"]
+    ref = next(p for p in paragraphs if p["id"] == entry["paragraph_id"])
+    assert ref["text"] == entry["normalized"]
+
+    detail = client.get(f"/api/paper/{pid}").json()
+    assert detail["current_version"] == applied.json()["version"]
+
+    body = next(p for p in paragraphs if p["type"] == "body")
+    rejected = client.post(f"/api/paper/{pid}/references/apply", json={"items": [{
+        "paragraph_id": body["id"],
+        "revised": "不应保存",
+        "expected_original": body["text"],
+    }]})
+    assert rejected.status_code == 400
 
 
 # ---------- 模型选择 ----------

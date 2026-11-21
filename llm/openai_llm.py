@@ -191,6 +191,7 @@ class OpenAICompatibleLLM(BaseLLM):
         tools: Optional[list[dict]] = None,
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
+        timeout: Optional[float] = None,
     ) -> Iterator[str]:
         """流式输出。"""
         kwargs: dict = {
@@ -201,16 +202,25 @@ class OpenAICompatibleLLM(BaseLLM):
         }
         if max_tokens:
             kwargs["max_tokens"] = max_tokens
+        if timeout is not None:
+            kwargs["timeout"] = timeout
         if tools:
             kwargs["tools"] = self._format_tools(tools)
 
+        stream = self.client.chat.completions.create(**kwargs)
+        reason = None
         try:
-            stream = self.client.chat.completions.create(**kwargs)
             for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content
-        except APIError as e:
-            yield f"\n[流式输出失败: {e}]"
+                if chunk.choices:
+                    choice = chunk.choices[0]
+                    if choice.delta.content:
+                        yield choice.delta.content
+                    if choice.finish_reason:
+                        reason = choice.finish_reason
+            if reason != "stop":
+                raise RuntimeError(f"模型流式响应未完整结束（{reason or '连接中断'}）")
+        finally:
+            stream.close()
 
     def ping(self) -> bool:
         """健康检查：服务是否可达。"""
@@ -288,6 +298,13 @@ class OpenAICompatibleLLM(BaseLLM):
             "detail": f"就绪，当前模型: {current}",
         }
 
+    def close(self) -> None:
+        """关闭底层 HTTP 连接池。"""
+        try:
+            self.client.close()
+        except Exception:
+            pass
+
     def _discover_model(self) -> str:
         """自动发现本地服务当前加载的模型。
 
@@ -301,7 +318,10 @@ class OpenAICompatibleLLM(BaseLLM):
                 timeout=3.0,
                 max_retries=0,
             )
-            models = [m.id for m in probe.models.list().data]
+            try:
+                models = [m.id for m in probe.models.list().data]
+            finally:
+                probe.close()
             return models[0] if models else ""
         except Exception:
             return ""
@@ -354,4 +374,5 @@ class OpenAICompatibleLLM(BaseLLM):
             tool_calls=tool_calls,
             usage=usage,
             raw=resp,
+            finish_reason=getattr(choice, "finish_reason", "") or "",
         )

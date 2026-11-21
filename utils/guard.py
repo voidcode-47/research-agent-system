@@ -26,7 +26,6 @@ _HARD_OFF_TOPIC = [
         r"|(?:翻译|译成|译为).{0,6}(?:整篇|全文|整本|以下全部)"
     ),
     re.compile(r"(写|代写|生成|创作).{0,8}(小说|作文|文案|邮件|简历|诗歌|故事|演讲稿|剧本)"),
-    re.compile(r"(股票|彩票|天气|菜谱|食谱|星座|算命|运势)"),
     re.compile(r"(写|编|做|生成|开发|实现|教我).{0,12}(代码|程序|爬虫|脚本|网页|网站|小程序|外挂)"),
 ]
 
@@ -36,6 +35,9 @@ _LANGUAGE_RE = re.compile(
     re.IGNORECASE,
 )
 _CODE_HINT_RE = re.compile(r"(代码|编程|程序|爬虫|脚本|算法实现)")
+_DOMAIN_RE = re.compile(r"股票|彩票|天气|菜谱|食谱|星座|算命|运势")
+_ACADEMIC_OPERATION = re.compile(r"分析|检查|指出|润色|改写|实验|数据划分|交叉验证|统计检验|样本|方法|结论|文献")
+_LIFE_SERVICE = re.compile(r"推荐.{0,12}股票|(?:查一下|查询|查看|告诉我|看看).{0,16}(?:天气|股票)|(?:买入|会涨).{0,8}股票")
 
 # 纯寒暄短句
 _GREETING_RE = re.compile(
@@ -76,6 +78,10 @@ def is_off_topic(text: str) -> bool:
     if _GREETING_RE.match(t):
         return True
     if any(p.search(t) for p in _HARD_OFF_TOPIC):
+        return True
+    if _DOMAIN_RE.search(t) and (
+            _LIFE_SERVICE.search(t)
+            or not (has_paper_signal(t) and _ACADEMIC_OPERATION.search(t))):
         return True
     # 单独出现编程语言名时，若没有论文信号，视为写代码类请求；
     # 带"代码/算法实现"等词时同样处理（如"帮我用 java 实现这个算法"）

@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<link rel="stylesheet" href="/style.css?v=a0667b62c64c">
+<link rel="stylesheet" href="/style.css?v=93300b2379b1">
 </head>
 <body>
 <div class="layout">
@@ -165,8 +165,19 @@
           </div>
           <div class="paper-total" id="paper-total-score"></div>
           <div id="paper-dim-cards" class="paper-dim-cards"></div>
+          <div id="paper-trend" class="paper-trend hidden"></div>
           <div id="paper-diag-logs" class="log-area hidden"></div>
           <div id="paper-issues" class="paper-issues"></div>
+          <div class="paper-refs">
+            <div class="section-title">参考文献检查与规范化</div>
+            <p class="muted">本地核对正文引用与文献条目的对应关系，并按 GB/T 7714 做保守的著录格式规范化；保存会生成新版本。</p>
+            <div class="row">
+              <button id="btn-paper-refs-check" class="btn btn-ghost">检查参考文献</button>
+              <button id="btn-paper-refs-apply" class="btn btn-primary hidden" disabled>一键规范化并保存（0）</button>
+              <span id="paper-refs-status" class="hint-line"></span>
+            </div>
+            <div id="paper-refs-list" class="paper-refs-list"></div>
+          </div>
         </div>
       </div>
 
@@ -208,6 +219,7 @@
               <button id="btn-paper-export" class="btn btn-ghost">导出 Word</button>
               <button id="btn-paper-export-pdf" class="btn btn-ghost">导出 PDF</button>
               <button id="btn-paper-export-summary" class="btn btn-ghost">导出修改说明</button>
+              <button id="btn-paper-export-tracked" class="btn btn-ghost">导出 Word（修订）</button>
               <button id="btn-paper-backup" class="btn btn-ghost">备份数据</button>
               <button id="btn-paper-cleanup" class="btn btn-ghost">整理旧版本</button>
             </div>
@@ -579,6 +591,6 @@
 </dialog>
 
 <script src="/app.js?v=b6cb8bdeb8cb"></script>
-<script src="/paper.js?v=5c2ea34dc48f"></script>
+<script src="/paper.js?v=a1a0ce74e9a8"></script>
 </body>
 </html>

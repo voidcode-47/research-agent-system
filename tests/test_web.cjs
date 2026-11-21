@@ -54,6 +54,134 @@ test("diagnosis always shows four dimensions including unfinished ones", () => {
   assert.equal(elements.get("paper-dim-cards").children.length, 4);
 });
 
+test("diagnosis renders ai rate trend and paragraph risk heatmap", () => {
+  const { context, elements } = loadPage();
+  context.pwRenderDiagnosis({
+    deai: {
+      score: 72, ai_rate: 28, ai_score: 28,
+      paragraph_risk: { high: 1, medium: 0 },
+      paragraph_risks: [
+        { index: 0, paragraph_id: "p1", page: 1, risk: "high", risk_points: 5, hits: ["排比"] },
+        { index: 1, paragraph_id: "p2", page: 2, risk: "low", risk_points: 1, hits: [] },
+      ],
+    },
+  }, 72, [
+    { dimension: "deai", version: 0, ai_rate: 42, score: 58 },
+    { dimension: "deai", version: 1, ai_rate: 28, score: 72 },
+  ]);
+  const panel = elements.get("paper-trend");
+  assert.match(panel.innerHTML, /trend-svg/);
+  assert.match(panel.innerHTML, /heat-cell risk-high/);
+  assert.match(panel.innerHTML, /data-pid="p1"/);
+  assert.match(panel.innerHTML, /较上次 -14%/);
+  assert.equal(panel.classList.contains("hidden"), false);
+});
+
+test("trend panel stays hidden without deai history or risks", () => {
+  const { context, elements, run } = loadPage();
+  context.pwRenderDiagnosis({ level: { score: 80 } }, 80);
+  assert.equal(elements.get("paper-trend").classList.contains("hidden"), true);
+  assert.equal(elements.get("paper-trend").innerHTML, "");
+  assert.equal(run("paperState.highRiskIds.length"), 0);
+});
+
+test("trend panel exposes one-click batch rewrite for high risk paragraphs", () => {
+  const { context, elements, run } = loadPage();
+  context.pwRenderDiagnosis({
+    deai: {
+      score: 60,
+      paragraph_risks: [
+        { index: 0, paragraph_id: "p1", page: 1, risk: "high", risk_points: 5, hits: [] },
+        { index: 1, paragraph_id: "p2", page: 1, risk: "medium", risk_points: 3, hits: [] },
+        { index: 2, paragraph_id: "p3", page: 2, risk: "high", risk_points: 4, hits: [] },
+        { index: 3, paragraph_id: "", page: 2, risk: "high", risk_points: 4, hits: [] },
+      ],
+    },
+  }, 60);
+  assert.deepEqual(Array.from(run("paperState.highRiskIds")), ["p1", "p3"]);
+  const panel = elements.get("paper-trend");
+  assert.match(panel.innerHTML, /id="btn-paper-batch-high"/);
+  assert.match(panel.innerHTML, /一键改写高风险段落（2）/);
+});
+
+test("one-click batch rewrite selects only rewritable high risk paragraphs", async () => {
+  const { context, elements, run } = loadPage();
+  run(`paperState.paperId = "p_test";
+    paperState.highRiskIds = ["p1", "p2", "p3", "p4"];`);
+  context.pwSetStep = () => { run("paperState.step = 5"); };
+  context.pwRenderParagraphs = () => {};
+  context.pwLoadParagraphs = async () => {
+    run(`paperState.paragraphs = [
+      { id: "p1", type: "body", text: "短句一" },
+      { id: "p2", type: "body", text: "长".repeat(2100) },
+      { id: "p3", type: "body", text: "表格段落", table_id: "t1" },
+      { id: "p4", type: "body", text: "短句四" },
+    ];`);
+  };
+  elements.get("paper-mode").options = [{ value: "polish" }];
+  const alerts = [];
+  context.pwAlert = (msg, kind) => alerts.push({ msg, kind });
+
+  await context.pwBatchHighRisk();
+
+  assert.deepEqual(Array.from(run("paperState.batchIds")), ["p1", "p4"]);
+  assert.equal(elements.get("paper-mode").value, "deai");
+  assert.equal(run('paperState.step'), 5);
+  assert.ok(alerts.some((a) => a.msg.includes("已勾选 2 段高风险正文")));
+});
+
+test("references panel renders normalization preview and apply action", () => {
+  const { context, elements, run } = loadPage();
+  run(`paperState.refs = {
+    reference_style: "gbt7714",
+    summary: "参考文献 2 条，发现 1 个问题。",
+    entries: [
+      { paragraph_id: "r1", page: 1, number: 1, text: "[1] 张三. 方法[j]. 学报, 2020",
+        normalized: "[1] 张三. 方法[J]. 学报, 2020.", changed: true, type: "J",
+        type_label: "期刊论文", cited: true, problems: [] },
+      { paragraph_id: "r2", page: 2, number: 2, text: "[2] 李四. 研究[M]. 北京: 科学出版社, 2021.",
+        normalized: "[2] 李四. 研究[M]. 北京: 科学出版社, 2021.", changed: false, type: "M",
+        type_label: "专著", cited: false,
+        problems: [{ code: "REF-002", severity: "medium", message: "该条目未被正文引用" }] }
+    ]
+  };`);
+  context.pwRenderReferences();
+  const box = elements.get("paper-refs-list");
+  assert.match(box.innerHTML, /规范化后/);
+  assert.match(box.innerHTML, /可规范化/);
+  assert.match(box.innerHTML, /未引用/);
+  assert.match(box.innerHTML, /该条目未被正文引用/);
+  assert.match(elements.get("btn-paper-refs-apply").textContent, /（1）/);
+  assert.equal(elements.get("btn-paper-refs-apply").classList.contains("hidden"), false);
+  assert.match(elements.get("paper-refs-status").textContent, /参考文献 2 条/);
+});
+
+test("applying reference normalization sends only changed entries", async () => {
+  const { context, run } = loadPage();
+  let sent;
+  context.fetch = async (url, opts) => {
+    sent = { url, body: JSON.parse(opts.body) };
+    return { ok: true, json: async () => ({ version: 3 }) };
+  };
+  context.pwLoadPaper = async () => {};
+  context.pwLoadReferences = async () => {};
+  const alerts = [];
+  context.pwAlert = (msg) => alerts.push(msg);
+  run(`paperState.paperId = "p1";
+    paperState.refs = { entries: [
+      { paragraph_id: "r1", text: "旧一", normalized: "新一", changed: true },
+      { paragraph_id: "r2", text: "旧二", normalized: "旧二", changed: false }
+    ] };`);
+
+  await context.pwApplyReferences();
+
+  assert.equal(sent.url, "/api/paper/p1/references/apply");
+  assert.deepEqual(sent.body.items, [
+    { paragraph_id: "r1", revised: "新一", expected_original: "旧一" },
+  ]);
+  assert.ok(alerts.some((m) => m.includes("已规范化并保存 1 条")));
+});
+
 test("retrying a partial diagnosis only requests missing or stale dimensions", async () => {
   const { context, run } = loadPage();
   run(`paperState.paperId = "p_test";
@@ -358,6 +486,26 @@ test("exports use server filenames including Chinese RFC 5987 names", () => {
   assert.equal(context.pwExportFilename(response('attachment; filename="paper.pdf"'), "pdf"), "paper.pdf");
   assert.equal(context.pwExportFilename(response(""), "summary"), "论文修改说明.docx");
   assert.equal(context.pwExportFilename(response(""), "zip", "论文_备份.zip"), "论文_备份.zip");
+});
+
+test("tracked export requests revision mode", async () => {
+  const { context, run } = loadPage();
+  run('paperState.paperId = "p1"');
+  context.URL = { createObjectURL: () => "blob:x", revokeObjectURL() {} };
+  context.document.body = { appendChild() {} };
+  context.document.createElement = () => ({ click() {}, remove() {} });
+  let requested;
+  context.fetch = async (url) => {
+    requested = url;
+    return { ok: true, headers: { get: () => "" }, blob: async () => ({}) };
+  };
+  const alerts = [];
+  context.pwAlert = (msg) => alerts.push(msg);
+
+  await context.pwExport("docx", true);
+
+  assert.equal(requested, "/api/paper/p1/export?format=docx&tracked=true");
+  assert.ok(alerts.some((m) => m.includes("修订版")));
 });
 
 test("Markdown escapes markup and refuses executable links", () => {
@@ -724,6 +872,74 @@ test("adoption conflict keeps the local diff and refreshes version state", async
   assert.ok(alerts.some((a) => a.msg.includes("论文已更新")));
   assert.equal(elements.get("btn-paper-adopt").disabled, false);
 });
+
+for (const batch of [false, true]) {
+  for (const outcome of ["success", "conflict", "failure"]) {
+    test(`late ${batch ? "batch" : "single"} adoption ${outcome} preserves another paper's pending adoption`, async () => {
+      const { context, elements, run } = loadPage();
+      const pending = new Map();
+      const endpoint = batch ? "/apply-batch" : "/apply";
+      context.api = async (url) => {
+        if (url.endsWith(endpoint)) {
+          return new Promise((resolve, reject) => pending.set(url, { resolve, reject }));
+        }
+        if (url === "/api/paper/new-paper") {
+          return { id: "new-paper", title: "New paper", current_version: 7,
+            version_count: 8, requirement: { confirmed: true }, analyzed: {} };
+        }
+        if (url.includes("/paragraphs")) return { paragraphs: [], sections: [], tables: [] };
+        if (url.endsWith("/rewrite/guideline")) return { guideline: null };
+        if (url.endsWith("/similar")) return { items: [] };
+        if (url.startsWith("/api/paper?")) return { papers: [], total: 0 };
+        throw new Error(`Unexpected request: ${url}`);
+      };
+      run(`paperState.paperId = "old-paper"; paperState.step = 5;
+        paperState.selected = { id: "old-para" };
+        paperState.rewrite = { paragraph_id: "old-para", original: "旧正文", revised: "新正文", source_version: 0 };
+        paperState.batchResults = [paperState.rewrite];
+        paperState.batchIds = new Set(["old-para"]);`);
+      const adopt = batch ? context.pwAdoptBatch : context.pwAdopt;
+      const oldAdoption = adopt();
+      const oldRequest = pending.get(`/api/paper/old-paper${endpoint}`);
+      assert.ok(oldRequest, "old paper adoption reached the network");
+
+      await context.pwLoadPaper("new-paper");
+      run(`paperState.step = 5; paperState.selected = { id: "new-para" };
+        paperState.rewrite = { paragraph_id: "new-para", original: "另一篇原文", revised: "另一篇改写", source_version: 7 };
+        paperState.diff = pwGroupDiff([{ type: "insert", text: "另一篇改写" }]);
+        paperState.batchResults = [paperState.rewrite];
+        paperState.batchIds = new Set(["new-para"]);`);
+      const newAdoption = adopt();
+      const newRequest = pending.get(`/api/paper/new-paper${endpoint}`);
+      assert.ok(newRequest, "new paper adoption is independently pending");
+      const before = run("JSON.stringify({paper: paperState.paper, selected: paperState.selected, rewrite: paperState.rewrite, diff: paperState.diff, batchResults: paperState.batchResults, batchIds: [...paperState.batchIds]})");
+      const version = elements.get("paper-version").textContent;
+      elements.get("paper-alert").textContent = "New paper is saving";
+      const button = elements.get(batch ? "btn-paper-batch-adopt" : "btn-paper-adopt");
+      assert.equal(button.disabled, true);
+
+      if (outcome === "success") {
+        oldRequest.resolve({ version: 1, paragraph_id: "old-para", paragraph_ids: ["old-para"] });
+      } else {
+        const error = new Error("Old paper adoption failed");
+        error.status = outcome === "conflict" ? 409 : 500;
+        error.payload = { current_version: 1 };
+        oldRequest.reject(error);
+      }
+      await oldAdoption;
+
+      assert.equal(run("paperState.paperId"), "new-paper");
+      assert.equal(run("JSON.stringify({paper: paperState.paper, selected: paperState.selected, rewrite: paperState.rewrite, diff: paperState.diff, batchResults: paperState.batchResults, batchIds: [...paperState.batchIds]})"), before,
+        "old responses must preserve the new paper's selected paragraph, diff, version and results");
+      assert.equal(elements.get("paper-version").textContent, version);
+      assert.equal(elements.get("paper-alert").textContent, "New paper is saving");
+      assert.equal(button.disabled, true, "old finally must not enable the new pending operation");
+
+      newRequest.resolve({ version: 8, paragraph_id: "new-para", paragraph_ids: ["new-para"] });
+      await newAdoption;
+    });
+  }
+}
 
 test("batch adoption sends one atomic request and clears adopted results", async () => {
   const { context, elements, run } = loadPage();

@@ -39,6 +39,10 @@ const paperState = {
   batchResults: [],
   batchErrors: [],
   batchIds: new Set(),
+  highRiskIds: [],
+  refs: null,
+  refsPaperId: "",
+  refsSeq: 0,
   askDockBound: false,
   listQuery: "",
   listOffset: 0,
@@ -49,6 +53,7 @@ const paperState = {
   loadSeq: 0,
   paragraphSeq: 0,
   askSeq: 0,
+  adoptionSeq: 0,
   listTimer: null,
   taskSources: new Set(),
 };
@@ -97,6 +102,7 @@ function pwSetStep(n, force) {
     b.classList.toggle("done", s < paperState.maxStep);
   });
   document.querySelectorAll(".paper-step-panel").forEach((p) => p.classList.toggle("active", p.id === `paper-step-${n}`));
+  if (n === 3) pwLoadReferences();
   if (n === 4) pwLoadSimilar();
   if (n === 5) pwLoadParagraphs();
   pwSaveLastState();
@@ -357,6 +363,8 @@ async function initPaperPage() {
   $("btn-paper-upload-cancel").addEventListener("click", () => pwCancelUpload().catch(pwError));
   $("btn-paper-diagnose").addEventListener("click", () => pwStartDiagnose().catch(pwError));
   $("btn-paper-cancel").addEventListener("click", () => pwCancelDiagnose().catch(pwError));
+  $("btn-paper-refs-check").addEventListener("click", () => pwLoadReferences(true).catch(pwError));
+  $("btn-paper-refs-apply").addEventListener("click", () => pwApplyReferences().catch(pwError));
   $("btn-paper-similar").addEventListener("click", () => pwStartSimilar(false).catch(pwError));
   $("btn-paper-similar-refresh").addEventListener("click", () => pwStartSimilar(true).catch(pwError));
   $("btn-paper-similar-cancel").addEventListener("click", () => pwCancelSimilar().catch(pwError));
@@ -390,6 +398,7 @@ async function initPaperPage() {
   $("btn-diff-revert-all").addEventListener("click", () => pwSetAllDiff(false));
   $("btn-paper-export").addEventListener("click", () => pwExport("docx"));
   $("btn-paper-export-pdf").addEventListener("click", () => pwExport("pdf"));
+  $("btn-paper-export-tracked").addEventListener("click", () => pwExport("docx", true));
   $("btn-paper-ask").addEventListener("click", () => pwAsk().catch(pwError));
   $("paper-ask-answer").addEventListener("click", (e) => {
     const source = e.target.closest("[data-ask-basis]");
@@ -445,6 +454,15 @@ async function initPaperPage() {
     const item = e.target.closest(".issue-item");
     if (!item || !item.dataset.pid) return;
     pwGotoIssue(item.dataset.pid, item.dataset.instruction || "", item.dataset.mode || "").catch(pwError);
+  });
+  $("paper-trend").addEventListener("click", (e) => {
+    if (e.target.closest("#btn-paper-batch-high")) {
+      pwBatchHighRisk().catch(pwError);
+      return;
+    }
+    const cell = e.target.closest(".heat-cell");
+    if (!cell || !cell.dataset.pid) return;
+    pwGotoParagraph(cell.dataset.pid).catch(pwError);
   });
 
   try {
@@ -618,6 +636,12 @@ function pwResetPaper() {
   paperState.batchResults = [];
   paperState.batchErrors = [];
   paperState.batchIds = new Set();
+  paperState.refs = null;
+  paperState.refsPaperId = "";
+  $("paper-refs-list").innerHTML = "";
+  $("paper-refs-status").textContent = "";
+  $("btn-paper-refs-apply").classList.add("hidden");
+  $("btn-paper-refs-apply").disabled = true;
   pwTaskProgressHide("paper-diag");
   pwDiagCancelReset();
   pwTaskProgressHide("paper-upload");
@@ -665,6 +689,12 @@ async function pwLoadPaper(paperId, opts = {}) {
     paperState.batchResults = [];
     paperState.batchErrors = [];
     paperState.batchIds = new Set();
+    paperState.refs = null;
+    paperState.refsPaperId = "";
+    $("paper-refs-list").innerHTML = "";
+    $("paper-refs-status").textContent = "";
+    $("btn-paper-refs-apply").classList.add("hidden");
+    $("btn-paper-refs-apply").disabled = true;
     paperState.batchPaperId = "";
     paperState.batchTaskId = "";
     $("paper-batch-results").innerHTML = "";
@@ -728,11 +758,12 @@ async function pwLoadPaper(paperId, opts = {}) {
   if (!confirmed && p.suggestion) pwFillRequirement(p.suggestion);
   paperState.maxStep = confirmed ? 5 : 2;
   if (p.analysis_results && Object.keys(p.analysis_results).length) {
-    pwRenderDiagnosis(p.analysis_results, p.total_score);
+    pwRenderDiagnosis(p.analysis_results, p.total_score, p.analysis_history);
   } else {
     $("paper-dim-cards").innerHTML = "";
     $("paper-total-score").textContent = "";
     $("paper-issues").innerHTML = "";
+    pwRenderTrend(null, null);
   }
   const analyzed = p.analyzed || {};
   const done = Object.keys(analyzed).filter((k) => analyzed[k]).length;
@@ -1055,7 +1086,7 @@ function pwScoreClass(score) {
   return "bad";
 }
 
-function pwRenderDiagnosis(dims, total) {
+function pwRenderDiagnosis(dims, total, history) {
   const wrap = $("paper-dim-cards");
   wrap.innerHTML = "";
   PAPER_DIM_ORDER.forEach((key) => {
@@ -1074,6 +1105,11 @@ function pwRenderDiagnosis(dims, total) {
     const card = document.createElement("div");
     card.className = "paper-dim-card " + pwScoreClass(score);
     let extra = "";
+    if (d.coverage) {
+      const c = d.coverage;
+      const sections = Array.isArray(c.sections) ? c.sections.join("、") : "";
+      extra += `<p class="muted">证据覆盖：${Number(c.sampled_paragraphs) || 0}/${Number(c.total_paragraphs) || 0} 段，${Number(c.sampled_chars) || 0}/${Number(c.total_chars) || 0} 字。${esc(sections)}${c.partial ? "。仅基于抽样证据，未覆盖内容仍需核对。" : ""}</p>`;
+    }
     if (key === "feasibility" && d.minimal_plan) {
       extra += `<p class="dim-extra"><b>最小可行路径：</b>${esc(d.minimal_plan)}</p>`;
     }
@@ -1118,7 +1154,178 @@ function pwRenderDiagnosis(dims, total) {
   $("paper-total-score").innerHTML = total == null
     ? ""
     : `<span>综合得分</span><b class="${pwScoreClass(t)}">${t}</b><em>/ 100（按已诊断维度加权）</em>`;
+  pwRenderTrend(history, dims.deai);
   pwRenderIssues(dims);
+}
+
+function pwTrendSvg(points) {
+  const w = 320;
+  const h = 72;
+  const pad = 8;
+  const n = points.length;
+  const xs = points.map((_, i) => pad + (w - pad * 2) * (n === 1 ? 0.5 : i / (n - 1)));
+  const ys = points.map((p) => {
+    const v = Math.max(0, Math.min(100, Number(p.ai_rate) || 0));
+    return h - pad - (h - pad * 2) * (v / 100);
+  });
+  const line = xs.map((x, i) => `${i ? "L" : "M"}${x.toFixed(1)},${ys[i].toFixed(1)}`).join(" ");
+  const area = `${line} L${xs[n - 1].toFixed(1)},${h - pad} L${xs[0].toFixed(1)},${h - pad} Z`;
+  const dots = points.map((p, i) => {
+    const label = `${Number(p.ai_rate) || 0}%${p.generated_at ? " · " + p.generated_at : ""}`;
+    return `<circle class="trend-dot" cx="${xs[i].toFixed(1)}" cy="${ys[i].toFixed(1)}" r="2.6"><title>${esc(label)}</title></circle>`;
+  }).join("");
+  return `<svg class="trend-svg" viewBox="0 0 ${w} ${h}" role="img" aria-label="AI 生成率趋势">
+      <path class="trend-area" d="${area}"></path>
+      <path class="trend-line" d="${line}"></path>
+      ${dots}
+    </svg>`;
+}
+
+function pwRenderTrend(history, deai) {
+  const box = $("paper-trend");
+  if (!box) return;
+  const rows = (Array.isArray(history) ? history : [])
+    .filter((h) => h && h.dimension === "deai"
+      && h.ai_rate != null && Number.isFinite(Number(h.ai_rate)))
+    .map((h) => ({ ...h, ai_rate: Number(h.ai_rate) }));
+  const risks = deai && Array.isArray(deai.paragraph_risks) ? deai.paragraph_risks : [];
+  // 供「一键改写高风险段落」使用：只保留能映射到正文段落的 id，并去重
+  paperState.highRiskIds = Array.from(new Set(
+    risks.filter((r) => r && r.risk === "high" && r.paragraph_id).map((r) => r.paragraph_id)
+  ));
+  if (!rows.length && !risks.length) {
+    box.innerHTML = "";
+    box.classList.add("hidden");
+    return;
+  }
+  let html = "";
+  if (rows.length >= 2) {
+    const latest = rows[rows.length - 1];
+    const delta = latest.ai_rate - rows[rows.length - 2].ai_rate;
+    const deltaClass = delta > 0 ? "up" : delta < 0 ? "down" : "flat";
+    const deltaText = delta === 0 ? "与上次持平" : `较上次 ${delta > 0 ? "+" : ""}${delta}%`;
+    html += `<div class="trend-block">
+        <div class="trend-head"><span>AI 生成率趋势</span><span class="muted">最近 ${rows.length} 次诊断</span></div>
+        ${pwTrendSvg(rows)}
+        <div class="trend-meta"><b>${latest.ai_rate}%</b><span class="trend-delta ${deltaClass}">${deltaText}</span></div>
+      </div>`;
+  } else if (rows.length === 1) {
+    html += `<p class="muted">再完成一次诊断后可查看 AI 生成率趋势（当前 ${rows[0].ai_rate}%）。</p>`;
+  }
+  if (risks.length) {
+    const counts = deai.paragraph_risk || {};
+    const high = Number(counts.high) || risks.filter((r) => r.risk === "high").length;
+    const medium = Number(counts.medium) || risks.filter((r) => r.risk === "medium").length;
+    const mapped = risks.some((r) => r.paragraph_id);
+    const cells = risks.map((r) => {
+      const risk = ["high", "medium", "low"].includes(r.risk) ? r.risk : "low";
+      const riskLabel = risk === "high" ? "高" : risk === "medium" ? "中" : "低";
+      const hits = (Array.isArray(r.hits) ? r.hits.slice(0, 3).join("、") : "");
+      const label = `第 ${Number(r.index) + 1} 段 · ${riskLabel}风险 ${Number(r.risk_points) || 0} 分${hits ? " · " + hits : ""}`;
+      return `<span class="heat-cell risk-${risk}" data-pid="${esc(r.paragraph_id || "")}" title="${esc(label)}"></span>`;
+    }).join("");
+    html += `<div class="trend-block">
+        <div class="trend-head"><span>段落风险热力</span><span class="muted">高 ${high} · 中 ${medium} · 共 ${risks.length} 段${mapped ? " · 点击色块定位段落" : ""}</span></div>
+        <div class="paper-heat">${cells}</div>
+        <div class="heat-legend"><i class="heat-key risk-low"></i>低<i class="heat-key risk-medium"></i>中<i class="heat-key risk-high"></i>高</div>
+        ${paperState.highRiskIds.length ? `<div class="heat-actions">
+          <button class="btn btn-primary" id="btn-paper-batch-high">一键改写高风险段落（${paperState.highRiskIds.length}）</button>
+          <span class="muted">自动勾选高风险正文段，单次最多改写 8 段</span>
+        </div>` : ""}
+      </div>`;
+  }
+  box.innerHTML = html;
+  box.classList.remove("hidden");
+}
+
+// ---------- 参考文献检查 ----------
+async function pwLoadReferences(force) {
+  if (!paperState.paperId) {
+    if (force) pwAlert("请先上传论文", "warn", 3);
+    return;
+  }
+  const pid = paperState.paperId;
+  if (!force && paperState.refs && paperState.refsPaperId === pid) return;
+  const seq = ++paperState.refsSeq;
+  $("paper-refs-status").textContent = "正在检查参考文献…";
+  try {
+    const data = await api(`/api/paper/${encodeURIComponent(pid)}/references`);
+    if (pid !== paperState.paperId || seq !== paperState.refsSeq) return;
+    paperState.refs = data;
+    paperState.refsPaperId = pid;
+    pwRenderReferences();
+  } catch (e) {
+    if (pid !== paperState.paperId || seq !== paperState.refsSeq) return;
+    $("paper-refs-status").textContent = "";
+    pwAlert("参考文献检查失败：" + e.message, "err", 3);
+  }
+}
+
+function pwRenderReferences() {
+  const box = $("paper-refs-list");
+  const data = paperState.refs;
+  const applyBtn = $("btn-paper-refs-apply");
+  if (!data) {
+    box.innerHTML = "";
+    $("paper-refs-status").textContent = "";
+    applyBtn.classList.add("hidden");
+    applyBtn.disabled = true;
+    return;
+  }
+  const entries = data.entries || [];
+  const changed = entries.filter((e) => e.changed);
+  applyBtn.textContent = `一键规范化并保存（${changed.length}）`;
+  applyBtn.classList.toggle("hidden", changed.length === 0);
+  applyBtn.disabled = !changed.length;
+  $("paper-refs-status").textContent = data.summary || "";
+  if (!entries.length) {
+    box.innerHTML = '<p class="muted">未识别到参考文献条目，请确认论文含「参考文献」章节。</p>';
+    return;
+  }
+  const numeric = data.reference_style === "gbt7714" || data.reference_style === "ieee";
+  box.innerHTML = entries.map((e) => {
+    const num = e.number == null ? "未编号" : `[${e.number}]`;
+    const chips = [];
+    if (numeric && !e.cited) chips.push('<span class="chip ref-warn">未引用</span>');
+    if (e.type_label) chips.push(`<span class="chip">${esc(e.type_label)}</span>`);
+    if (e.changed) chips.push('<span class="chip ref-ok">可规范化</span>');
+    const problems = (e.problems || []).map((p) =>
+      `<div class="ref-problem sev-${p.severity === "high" ? "high" : p.severity === "low" ? "low" : "medium"}">${esc(p.message)}</div>`
+    ).join("");
+    const normalized = e.changed
+      ? `<div class="ref-normalized"><span>规范化后</span>${esc(e.normalized)}</div>` : "";
+    return `<div class="ref-item${e.changed ? " changed" : ""}">
+        <div class="ref-meta"><b>${esc(num)}</b><span class="muted">第 ${e.page || "-"} 页</span>${chips.join("")}</div>
+        <div class="ref-text">${esc(e.text)}</div>
+        ${problems}${normalized}
+      </div>`;
+  }).join("");
+}
+
+async function pwApplyReferences() {
+  const data = paperState.refs;
+  if (!data || !paperState.paperId) return;
+  const items = (data.entries || []).filter((e) => e.changed).map((e) => ({
+    paragraph_id: e.paragraph_id,
+    revised: e.normalized,
+    expected_original: e.text,
+  }));
+  if (!items.length) {
+    pwAlert("没有需要规范化的文献条目。", "warn", 3);
+    return;
+  }
+  const btn = $("btn-paper-refs-apply");
+  btn.disabled = true;
+  try {
+    const r = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/references/apply`, { items });
+    pwAlert(`已规范化并保存 ${items.length} 条参考文献（v${r.version}）。`, "ok", 3);
+    await pwLoadPaper(paperState.paperId);
+    paperState.refs = null;
+    await pwLoadReferences(true);
+  } catch (e) {
+    btn.disabled = false;
+    pwAlert(e.message, "err", 3);
+  }
 }
 
 function pwIssueRewriteMode(dimKey, it) {
@@ -1432,6 +1639,41 @@ function pwClearBatchSelection() {
     row.classList.remove("batch-active");
   });
   pwUpdateBatchBar();
+}
+
+async function pwBatchHighRisk() {
+  if (!paperState.paperId) { pwAlert("请先上传论文", "warn"); return; }
+  const ids = Array.isArray(paperState.highRiskIds) ? paperState.highRiskIds : [];
+  if (!ids.length) { pwAlert("当前诊断暂无可定位的高风险段落。", "warn", 3); return; }
+  // 清空章节筛选，确保跨章节的高风险段落都能被勾选到
+  $("paper-section-filter").value = "";
+  pwSetStep(5, true);
+  await pwLoadParagraphs();
+  const limit = pwRewriteLimit();
+  const alive = new Map((paperState.paragraphs || []).map((p) => [p.id, p]));
+  const picked = ids.filter((id) => {
+    const p = alive.get(id);
+    return p && p.type === "body" && !p.table_id && (p.text || "").length <= limit;
+  });
+  if (!picked.length) {
+    pwAlert("高风险段落都不属于可改写正文（可能已变更、超长或被拆表），请在左侧手动勾选。", "warn", 5);
+    return;
+  }
+  const capped = picked.slice(0, 8);
+  const overflow = picked.length - capped.length;
+  paperState.batchIds = new Set(capped);
+  pwRenderParagraphs();
+  const sel = $("paper-mode");
+  if (!pwHasOption(sel, "deai")) {
+    const opt = document.createElement("option");
+    opt.value = "deai";
+    opt.textContent = PAPER_MODE_LABELS.deai || "deai";
+    sel.appendChild(opt);
+  }
+  sel.value = "deai";
+  pwAlert(`已勾选 ${capped.length} 段高风险正文，模式为「去 AI 味」`
+    + (overflow ? `；另有 ${overflow} 段超出单次 8 段上限，可改写后再处理` : "")
+    + "。确认后点击「批量改写选中」。", overflow ? "warn" : "ok", 5);
 }
 
 async function pwBatchRewrite() {
@@ -2033,9 +2275,15 @@ async function pwAdopt() {
     return;
   }
   const btn = $("btn-paper-adopt");
+  const paperId = paperState.paperId;
+  const paragraphId = paperState.selected.id;
+  const operation = ++paperState.adoptionSeq;
+  let loadSeq = paperState.loadSeq;
+  const current = () => paperState.paperId === paperId
+    && paperState.loadSeq === loadSeq && paperState.adoptionSeq === operation;
   btn.disabled = true;
   const payload = {
-    paragraph_id: paperState.selected.id,
+    paragraph_id: paragraphId,
     revised: revised,
   };
   if (r.source_version !== undefined && r.source_version !== null) {
@@ -2045,7 +2293,8 @@ async function pwAdopt() {
     payload.expected_original = r.original;
   }
   try {
-    const res = await postJSON(`/api/paper/${encodeURIComponent(paperState.paperId)}/apply`, payload);
+    const res = await postJSON(`/api/paper/${encodeURIComponent(paperId)}/apply`, payload);
+    if (!current() || paperState.rewrite !== r || paperState.selected?.id !== paragraphId) return;
     paperState.rewrite = null;
     paperState.diff = null;
     if ((paperState.batchResults || []).length) {
@@ -2055,29 +2304,37 @@ async function pwAdopt() {
     }
     paperState.batchIds.delete(res.paragraph_id);
     await pwLoadList();
-    await pwLoadPaper(paperState.paperId, { restoreStep: 5 });
+    if (!current()) return;
+    const reloading = pwLoadPaper(paperId, { restoreStep: 5 });
+    loadSeq = paperState.loadSeq;
+    await reloading;
+    if (!current()) return;
     await pwSelectParagraph(res.paragraph_id).catch(() => {});
+    if (!current()) return;
     pwRenderBatchResults();
     pwSetStep(5, true);
     pwAlert(`已采纳并保存为 v${res.version}。如需回退，可删除后重新上传，或继续逐段优化。`, "ok");
   } catch (e) {
+    if (!current()) return;
     if (e && e.status === 409) {
       // 保留当前差异对比，只刷新论文版本信息，便于用户重新生成或复制内容
       const body = e.payload || {};
-      const detail = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}`).catch(() => null);
+      const detail = await api(`/api/paper/${encodeURIComponent(paperId)}`).catch(() => null);
+      if (!current()) return;
       if (detail) {
         paperState.paper = detail;
         const archived = detail.archived_count ? `，已归档 ${detail.archived_count} 个` : "";
         $("paper-version").textContent = `当前版本 v${detail.current_version || 0}（共 ${detail.version_count || 1} 个版本${archived}）`;
       }
       await pwLoadList().catch(() => {});
+      if (!current()) return;
       const cur = body.current_version != null ? body.current_version : "?";
       pwAlert(`论文已更新（当前 v${cur}）：${e.message} 当前差异对比仍保留在页面中。`, "warn", 5);
     } else {
       pwAlert("采纳失败：" + (e && e.message ? e.message : "未知错误"), "err", 5);
     }
   } finally {
-    btn.disabled = false;
+    if (current()) btn.disabled = false;
   }
 }
 
@@ -2091,6 +2348,11 @@ async function pwAdoptBatch() {
     return;
   }
   const btn = $("btn-paper-batch-adopt");
+  const paperId = paperState.paperId;
+  const operation = ++paperState.adoptionSeq;
+  let loadSeq = paperState.loadSeq;
+  const current = () => paperState.paperId === paperId
+    && paperState.loadSeq === loadSeq && paperState.adoptionSeq === operation;
   btn.disabled = true;
   const payload = {
     items: items.map((r) => {
@@ -2104,35 +2366,43 @@ async function pwAdoptBatch() {
   };
   try {
     const res = await postJSON(
-      `/api/paper/${encodeURIComponent(paperState.paperId)}/apply-batch`, payload
+      `/api/paper/${encodeURIComponent(paperId)}/apply-batch`, payload
     );
+    if (!current() || paperState.batchResults !== items) return;
     const adopted = new Set(res.paragraph_ids || items.map((x) => x.paragraph_id));
     paperState.batchResults = items.filter((x) => !adopted.has(x.paragraph_id));
     adopted.forEach((pid) => paperState.batchIds.delete(pid));
     paperState.rewrite = null;
     paperState.diff = null;
     await pwLoadList();
-    await pwLoadPaper(paperState.paperId, { restoreStep: 5 });
+    if (!current()) return;
+    const reloading = pwLoadPaper(paperId, { restoreStep: 5 });
+    loadSeq = paperState.loadSeq;
+    await reloading;
+    if (!current()) return;
     pwRenderBatchResults();
     pwSetStep(5, true);
     pwAlert(`已批量采纳 ${adopted.size} 段，保存为 v${res.version}。`, "ok", 5);
   } catch (e) {
+    if (!current()) return;
     if (e && e.status === 409) {
       const body = e.payload || {};
-      const detail = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}`).catch(() => null);
+      const detail = await api(`/api/paper/${encodeURIComponent(paperId)}`).catch(() => null);
+      if (!current()) return;
       if (detail) {
         paperState.paper = detail;
         const archived = detail.archived_count ? `，已归档 ${detail.archived_count} 个` : "";
         $("paper-version").textContent = `当前版本 v${detail.current_version || 0}（共 ${detail.version_count || 1} 个版本${archived}）`;
       }
       await pwLoadList().catch(() => {});
+      if (!current()) return;
       const cur = body.current_version != null ? body.current_version : "?";
-      pwAlert(`批量采纳未保存（当前 v${cur}）：${e.message}`, "warn", 6);
+      pwAlert(`批量采纳未保存（当前 v${cur}）：${e.message}`, "warn", 5);
     } else {
       pwAlert("批量采纳失败：" + (e && e.message ? e.message : "未知错误"), "err", 5);
     }
   } finally {
-    pwSyncBatchAdoptButton();
+    if (current()) pwSyncBatchAdoptButton();
   }
 }
 
@@ -2147,10 +2417,11 @@ function pwExportFilename(resp, format, fallbackName) {
   return plain ? plain[1].trim() : fallback;
 }
 
-async function pwExport(format = "docx") {
+async function pwExport(format = "docx", tracked = false) {
   if (!paperState.paperId) { pwAlert("请先上传论文", "warn"); return; }
   try {
-    const resp = await fetch(`/api/paper/${encodeURIComponent(paperState.paperId)}/export?format=${format}`);
+    const query = `format=${format}` + (tracked ? "&tracked=true" : "");
+    const resp = await fetch(`/api/paper/${encodeURIComponent(paperState.paperId)}/export?${query}`);
     if (!resp.ok) {
       let detail = "";
       try { detail = (await resp.json()).detail || ""; } catch (e) {}
@@ -2160,12 +2431,14 @@ async function pwExport(format = "docx") {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = pwExportFilename(resp, format);
+    a.download = pwExportFilename(resp, format, tracked ? `${pwPaperStem()}_修订版.docx` : "");
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
-    if (format === "summary") {
+    if (tracked) {
+      pwAlert("修订版已导出：在 Word 中可逐条接受或拒绝段落改写。", "ok", 5);
+    } else if (format === "summary") {
       pwAlert("《论文修改说明》已导出，可直接随修改稿一起提交。", "ok", 5);
     }
   } catch (e) {

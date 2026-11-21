@@ -6,6 +6,7 @@ from config.paper import DEAI_STRENGTHS, PAPER_LEVELS, REWRITE_MODES
 from config.prompts import DEAI_REWRITE_PROMPT, REWRITE_GUIDE_PROMPT
 from llm.gateway import LLMGateway
 from paper import store
+from paper.contracts import Guide, Rewrite, valid
 from rules.deai_detector import detect, detect_language
 
 MAX_PARAGRAPH_CHARS = 2000
@@ -51,11 +52,7 @@ def make_diff(original: str, revised: str, context: int = 0) -> list[dict]:
 
 
 def _valid_rewrite(data) -> bool:
-    return (
-        isinstance(data, dict)
-        and isinstance(data.get("revised"), str)
-        and bool(data["revised"].strip())
-    )
+    return valid(data, Rewrite)
 
 
 def _guide_context(paragraphs: list[dict], max_chars: int = MAX_GUIDE_CHARS) -> str:
@@ -116,7 +113,7 @@ def _text(value, limit: int = 300) -> str:
 
 
 def _valid_guide(data) -> bool:
-    if not isinstance(data, dict):
+    if not valid(data, Guide):
         return False
     if str(data.get("summary") or "").strip():
         return True
@@ -359,12 +356,13 @@ def apply_rewrite(paper_id: str, paragraph_id: str, revised: str,
     }
 
 
-def apply_rewrites(paper_id: str, items: list[dict]) -> dict:
+def apply_rewrites(paper_id: str, items: list[dict], note: str | None = None,
+                   max_items: int = 8) -> dict:
     """原子采纳多段改写：任一段校验失败则全部不保存，只生成一个版本。"""
     if not items:
         raise ValueError("没有可采纳的改写内容")
-    if len(items) > 8:
-        raise ValueError("一次最多批量采纳 8 个段落")
+    if len(items) > max_items:
+        raise ValueError(f"一次最多批量采纳 {max_items} 个段落")
     with store.locked():
         current = store.current_version(paper_id)
         paragraphs = store.current_paragraphs(paper_id)
@@ -410,7 +408,7 @@ def apply_rewrites(paper_id: str, items: list[dict]) -> dict:
         for paragraph_id, text in updates.items():
             by_id[paragraph_id]["text"] = text
         version = store.save_version(
-            paper_id, paragraphs, note=f"批量采纳 {len(updates)} 段改写"
+            paper_id, paragraphs, note=note or f"批量采纳 {len(updates)} 段改写"
         )
         store.mark_analysis_stale(paper_id)
     return {

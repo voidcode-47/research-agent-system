@@ -5,6 +5,8 @@ import json
 import os
 
 from utils.logger import get_logger
+from utils.atomic_file import atomic_write
+from utils.config_io import transaction
 
 logger = get_logger(__name__)
 
@@ -23,6 +25,7 @@ _DEFAULTS = {
 }
 
 
+@transaction
 def load_prefs() -> dict:
     """读取 UI 偏好；文件不存在或损坏时返回默认值。"""
     try:
@@ -47,21 +50,17 @@ def load_prefs() -> dict:
         return copy.deepcopy(_DEFAULTS)
 
 
+@transaction
 def save_prefs(provider: str, model: str, custom_models: dict | None = None,
                research: dict | None = None) -> None:
     """保存 UI 偏好（幂等，仅配置变化时调用）。"""
-    try:
-        os.makedirs(os.path.dirname(os.path.abspath(PREFS_PATH)), exist_ok=True)
-        current = load_prefs()
-        current["provider"] = provider
-        current["model"] = model
-        if custom_models is not None:
-            current["custom_models"] = dict(custom_models)
-        if research is not None:
-            current["research"].update({
-                k: v for k, v in research.items() if k in _DEFAULTS["research"]
-            })
-        with open(PREFS_PATH, "w", encoding="utf-8") as f:
-            json.dump(current, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.warning(f"UI 偏好保存失败: {e}")
+    current = load_prefs()
+    current["provider"] = provider
+    current["model"] = model
+    if custom_models is not None:
+        current["custom_models"] = dict(custom_models)
+    if research is not None:
+        current["research"].update({
+            k: v for k, v in research.items() if k in _DEFAULTS["research"]
+        })
+    atomic_write(PREFS_PATH, json.dumps(current, ensure_ascii=False, indent=2))

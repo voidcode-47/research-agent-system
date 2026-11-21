@@ -305,9 +305,13 @@ def _score_en(items: list[dict], idx: int, prev_connector: bool) -> dict:
 
 
 def _paragraph_stats(lang: str, paragraphs: list[str], items: list[dict]) -> list[dict]:
+    grouped: dict[int, list[dict]] = {}
+    for it in items:
+        grouped.setdefault(int(it.get("paragraph") or 0), []).append(it)
+
     stats = []
     for p_idx, para in enumerate(paragraphs):
-        p_items = [it for it in items if it["paragraph"] == p_idx]
+        p_items = grouped.get(p_idx, ())
         seen: set[str] = set()
         hits: list[str] = []
         points = 0.0

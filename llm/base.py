@@ -19,6 +19,7 @@ class ChatResponse:
     tool_calls: list[ToolCall] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
     raw: Any = None  # 原始响应，便于调试
+    finish_reason: str = ""
 
     @property
     def has_tool_calls(self) -> bool:
@@ -86,3 +87,7 @@ class BaseLLM(ABC):
     def list_models(self) -> list[str]:
         """列出远端可用模型。云端提供商默认返回空（用静态配置）。"""
         return []
+
+    def close(self) -> None:
+        """释放底层 HTTP 连接；无状态实现无需覆盖。"""
+        return None

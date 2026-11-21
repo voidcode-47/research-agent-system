@@ -137,6 +137,9 @@ class LLMGateway:
                         msg += "。请在侧边栏「添加模型」并填写有效 API Key 后重试。"
                     raise _ModelCallFailed(msg)
                 completion_received = completion_received or bool(content.strip())
+                reason = getattr(resp, "finish_reason", "")
+                if reason and reason not in ("stop", "end_turn", "stop_sequence", "STOP"):
+                    raise ValueError("模型输出未完整结束（" + str(reason)[:80] + "）")
                 data = extract_json(content) if expect_json else content
                 if expect_json and data is None:
                     raise ValueError("模型输出不是合法 JSON")
@@ -167,7 +170,8 @@ class LLMGateway:
         raise RuntimeError(f"模型任务 {task_type} 执行失败：{last_err}")
 
     def stream(self, task_type: str, messages: list[dict], *,
-               temperature: float = 0.3, max_tokens: int | None = None):
+               temperature: float = 0.3, max_tokens: int | None = None,
+               timeout: float | None = None):
         """流式逻辑调用只扣一次；无输出失败退款，已有输出的失败保留计费。"""
         task = LLM_TASKS.get(task_type)
         if not task:
@@ -178,7 +182,8 @@ class LLMGateway:
         length = 0
         stream = None
         try:
-            stream = self.llm.stream_chat(messages, temperature=temperature, max_tokens=limit)
+            options = {"timeout": timeout} if timeout is not None else {}
+            stream = self.llm.stream_chat(messages, temperature=temperature, max_tokens=limit, **options)
             for chunk in stream:
                 if not chunk:
                     continue
@@ -190,10 +195,12 @@ class LLMGateway:
             if not received:
                 raise RuntimeError("模型未返回任何内容")
         finally:
-            if stream is not None and hasattr(stream, "close"):
-                stream.close()
-            if receipt is not None and not received:
-                self._refund(receipt)
+            try:
+                if stream is not None and hasattr(stream, "close"):
+                    stream.close()
+            finally:
+                if receipt is not None and not received:
+                    self._refund(receipt)
 
     def _refund(self, charge: quota.Charge | None) -> None:
         try:

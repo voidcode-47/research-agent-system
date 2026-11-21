@@ -1,6 +1,8 @@
 """.env 文件读写工具（设置页与侧边栏共用）。"""
 import re
 from pathlib import Path
+from utils.atomic_file import atomic_write
+from utils.config_io import transaction
 
 # 允许 `KEY=v`、`KEY = v`、`export KEY=v` 三种写法
 _ENV_KEY_RE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
@@ -42,9 +44,19 @@ def _line_key(line: str) -> str | None:
     return m.group(1) if m else None
 
 
+@transaction
 def update_env(updates: dict[str, str], path: str | Path = ".env") -> Path:
     """更新 .env 中的键值（已有 key 原位更新，新 key 追加），返回文件路径。"""
     p = Path(path)
+    encoded = {}
+    for key, value in updates.items():
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ValueError("非法的配置键名")
+        if not isinstance(value, str) or any(c in value for c in "\r\n\x00"):
+            raise ValueError("配置值必须是单行文本")
+        encoded[key] = ("'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+                        if re.search(r"[\s#'\"\\]", value) else value)
+    updates = encoded
     lines = load_env_lines(p)
     keys_written = set()
 
@@ -61,5 +73,5 @@ def update_env(updates: dict[str, str], path: str | Path = ".env") -> Path:
         if key not in keys_written:
             new_lines.append(f"{key}={value}")
 
-    p.write_text("\n".join(new_lines), encoding="utf-8")
+    atomic_write(p, "\n".join(new_lines) + "\n", private=True)
     return p

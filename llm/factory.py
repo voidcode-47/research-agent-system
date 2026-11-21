@@ -161,8 +161,21 @@ class LLMFactory:
             )
 
         if cacheable:
+            previous = _llm_cache.get(key)
             _llm_cache[key] = llm
+            if previous is not None and previous is not llm:
+                previous.close()
         return llm
+
+    @staticmethod
+    def close_all() -> None:
+        """关闭并清空缓存实例（服务退出或批量切换模型时调用）。"""
+        for llm in list(_llm_cache.values()):
+            try:
+                llm.close()
+            except Exception:
+                pass
+        _llm_cache.clear()
 
     @staticmethod
     def get_models(provider: str) -> list[str]:
@@ -210,7 +223,11 @@ class LLMFactory:
         """对指定提供商做详细健康检查（支持临时 Key/URL，供前端测试连接）。"""
         try:
             llm = LLMFactory.create(provider, model or None, api_key=api_key, base_url=base_url)
-            return llm.health_check()
+            try:
+                return llm.health_check()
+            finally:
+                if api_key or base_url:
+                    llm.close()
         except Exception as e:
             return {
                 "reachable": False,

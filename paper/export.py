@@ -7,17 +7,37 @@ import os
 from io import BytesIO
 from xml.sax.saxutils import escape
 
-from config.paper import DEFAULT_FORMAT, DIAGNOSIS_DIMENSIONS
+from config.paper import (
+    DEFAULT_FORMAT,
+    DIAGNOSIS_DIMENSIONS,
+    TEMPLATE_FORMAT_DEFAULTS,
+)
 from paper import store
+from utils.atomic_file import atomic_write
+
+
+def _effective_format(requirement: dict | None) -> dict:
+    """合并需求格式与模板默认值；仍是通用默认值的字段按所选模板排版。"""
+    user = dict(((requirement or {}).get("format")) or {})
+    template = user.get("template") or DEFAULT_FORMAT["template"]
+    overrides = TEMPLATE_FORMAT_DEFAULTS.get(template) or {}
+    fmt = dict(DEFAULT_FORMAT)
+    fmt.update(overrides)
+    for key, value in user.items():
+        if key in overrides and value == DEFAULT_FORMAT.get(key):
+            continue
+        fmt[key] = value
+    fmt["template"] = template
+    return fmt
 
 
 def _save_export(paper_id: str, filename: str, buf: BytesIO) -> None:
     """尽力保存导出副本；磁盘不可写时仍可下载内存中的结果。"""
     try:
-        out_dir = os.path.join(store.paper_dir(paper_id), "exports")
-        os.makedirs(out_dir, exist_ok=True)
-        with open(os.path.join(out_dir, filename), "wb") as f:
-            f.write(buf.getvalue())
+        with store.locked():
+            store.load_meta(paper_id)
+            out_dir = os.path.join(store.paper_dir(paper_id), "exports")
+            atomic_write(os.path.join(out_dir, filename), buf.getvalue())
     except (OSError, ValueError):
         pass
 
@@ -84,21 +104,79 @@ def _add_list_docx(doc, text: str, font_name: str, size: float, spacing: float) 
         _set_run_font(run, font_name, size)
 
 
+def _add_revision_run(para, text: str, kind: str, font_name: str, size: float,
+                      bold: bool, rev_id: int, date: str) -> None:
+    """把一段文字写成 Word 修订（w:ins / w:del），便于在 Word 中接受或拒绝。"""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    run = para.add_run()
+    _set_run_font(run, font_name, size, bold)
+    element = run._element
+    text_el = OxmlElement("w:delText" if kind == "del" else "w:t")
+    text_el.set(qn("xml:space"), "preserve")
+    text_el.text = text
+    rpr = element.find(qn("w:rPr"))
+    if rpr is not None:
+        rpr.addnext(text_el)
+    else:
+        element.insert(0, text_el)
+    wrapper = OxmlElement("w:ins" if kind == "ins" else "w:del")
+    wrapper.set(qn("w:id"), str(rev_id))
+    wrapper.set(qn("w:author"), "论文助手")
+    wrapper.set(qn("w:date"), date)
+    element.addprevious(wrapper)
+    wrapper.append(element)
+
+
+def _add_tracked_paragraph(doc, old_text: str, new_text: str, font_name: str,
+                           size: float, spacing: float, rev_id: int, date: str,
+                           bold: bool = False, first_indent: bool = False,
+                           center: bool = False, heading_level: int = 0) -> None:
+    """一段同时包含原文删除与改写后插入的修订段落。"""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt
+
+    if heading_level:
+        para = doc.add_paragraph(style=f"Heading {heading_level}")
+    else:
+        para = doc.add_paragraph()
+    para.paragraph_format.line_spacing = spacing
+    if center:
+        para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    if first_indent and not heading_level:
+        para.paragraph_format.first_line_indent = Pt(size * 2)
+    _add_revision_run(para, old_text, "del", font_name, size, bold, rev_id, date)
+    _add_revision_run(para, new_text, "ins", font_name, size, bold, rev_id + 1, date)
+
+
 def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None,
-                tables: list[dict] | None = None) -> BytesIO:
-    """生成论文正文 docx：字体/字号/行距/标题层级/题注/首行缩进。"""
+                tables: list[dict] | None = None, tracked: bool = False) -> BytesIO:
+    """生成论文正文 docx：字体/字号/行距/标题层级/题注/首行缩进。
+
+    tracked=True 时以版本 0 为基线，把改动写成 Word 修订（插入/删除），
+    并在文档设置中开启修订模式，便于作者逐条接受或拒绝。
+    """
     from docx import Document
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Pt
 
-    fmt = dict(DEFAULT_FORMAT)
-    fmt.update((requirement or {}).get("format") or {})
+    fmt = _effective_format(requirement)
     font_body = str(fmt.get("font_body") or "宋体")
     size = float(fmt.get("font_size_body_pt") or 12)
     spacing = float(fmt.get("line_spacing") or 1.5)
     table_map = {
         t.get("paragraph_id"): t for t in (tables or []) if t.get("paragraph_id")
     }
+    base_map: dict[str, dict] = {}
+    if tracked:
+        try:
+            base_map = {
+                p.get("id"): p
+                for p in (store.load_version(paper_id, 0).get("paragraphs") or [])
+            }
+        except (FileNotFoundError, ValueError, OSError):
+            base_map = {}
 
     doc = Document()
     normal = doc.styles["Normal"]
@@ -107,12 +185,45 @@ def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None,
     normal.paragraph_format.space_after = Pt(0)
 
     heading_sizes = {1: 16, 2: 14, 3: 13, 4: 12}
+    rev_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rev_id = 1
+    if tracked:
+        try:
+            from docx.oxml import OxmlElement
+            doc.settings.element.append(OxmlElement("w:trackRevisions"))
+        except (AttributeError, ImportError):
+            pass
 
     for p in paragraphs or []:
         text = (p.get("text") or "").strip()
         if not text:
             continue
         ptype = p.get("type")
+        old_text = None
+        if tracked and p.get("id") in base_map:
+            old_text = (base_map[p["id"]].get("text") or "").strip()
+            if old_text == text:
+                old_text = None
+        if old_text:
+            level = 0
+            psize = size
+            bold = False
+            center = False
+            indent = False
+            if ptype == "heading":
+                level = max(1, min(int(p.get("level") or 1), 4))
+                psize = heading_sizes[level]
+                bold = True
+            elif ptype == "caption":
+                center = True
+            elif ptype not in ("cover", "toc", "table", "table_note") and not p.get("list_items"):
+                indent = True
+            _add_tracked_paragraph(
+                doc, old_text, text, font_body, psize, spacing, rev_id, rev_date,
+                bold=bold, first_indent=indent, center=center, heading_level=level,
+            )
+            rev_id += 2
+            continue
         if ptype == "heading":
             level = int(p.get("level") or 1)
             level = max(1, min(level, 4))
@@ -154,11 +265,24 @@ def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None,
             run = para.add_run(text)
             _set_run_font(run, font_body, size)
 
+    if tracked and base_map:
+        current_ids = {p.get("id") for p in (paragraphs or [])}
+        for pid, base in base_map.items():
+            if pid in current_ids:
+                continue
+            text = (base.get("text") or "").strip()
+            if not text:
+                continue
+            para = doc.add_paragraph()
+            para.paragraph_format.line_spacing = spacing
+            _add_revision_run(para, text, "del", font_body, size, False, rev_id, rev_date)
+            rev_id += 1
+
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
 
-    _save_export(paper_id, "optimized.docx", buf)
+    _save_export(paper_id, "tracked.docx" if tracked else "optimized.docx", buf)
     return buf
 
 
@@ -277,8 +401,7 @@ def export_pdf(paper_id: str, paragraphs: list[dict], requirement: dict | None,
     except ImportError as e:
         raise ValueError("reportlab 未安装，无法导出 PDF") from e
 
-    fmt = dict(DEFAULT_FORMAT)
-    fmt.update((requirement or {}).get("format") or {})
+    fmt = _effective_format(requirement)
     size = float(fmt.get("font_size_body_pt") or 12)
     spacing = float(fmt.get("line_spacing") or 1.5)
     body_font, heading_font = _pdf_font_names()

@@ -15,6 +15,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import asynccontextmanager
 from typing import Optional
 from urllib.parse import quote
 
@@ -28,25 +29,24 @@ from config.llm_config import PROVIDER_CONFIG, get_provider_config, list_provide
 from llm.factory import LLMFactory
 from llm.gateway import LLMGateway
 from api import paper as paper_api
-from utils import quota
 from utils import auth, frontend_assets, runtime_lock
 from utils import custom_providers
 from utils.logger import get_logger
 from utils.prefs import load_prefs, save_prefs
 from utils.env_file import update_env
 from utils.atomic_file import atomic_write
+from utils.config_io import transaction as config_transaction
 
 logger = get_logger(__name__)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_WEB_DIR = os.path.join(BASE_DIR, "web")
 REPORT_DIR = os.path.join(BASE_DIR, "data", "reports")
 os.makedirs(REPORT_DIR, exist_ok=True)
 
-app = FastAPI(title="论文诊断与优化工作台", version="3.0.0")
 
-
-@app.on_event("startup")
-def _ensure_admin_account():
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
     from api import paper as paper_api
     from paper import store as paper_store
 
@@ -68,11 +68,16 @@ def _ensure_admin_account():
     except Exception:
         runtime_lock.release()
         raise
+    try:
+        yield
+    finally:
+        try:
+            LLMFactory.close_all()
+        finally:
+            runtime_lock.release()
 
 
-@app.on_event("shutdown")
-def _release_runtime_lock():
-    runtime_lock.release()
+app = FastAPI(title="论文诊断与优化工作台", version="3.0.0", lifespan=lifespan)
 
 
 @app.middleware("http")
@@ -387,6 +392,7 @@ def api_health_check(req: HealthCheckRequest):
 
 
 @app.post("/api/settings", dependencies=[Depends(require_admin)])
+@config_transaction
 def api_save_settings(req: SettingsRequest):
     custom_providers.migrate_legacy_custom_api()
     prefs = load_prefs()
@@ -428,19 +434,18 @@ def api_save_settings(req: SettingsRequest):
         updates = {}
         if req.custom_base_url is not None:
             updates["CUSTOM_API_BASE_URL"] = req.custom_base_url.strip()
-            settings.CUSTOM_API_BASE_URL = updates["CUSTOM_API_BASE_URL"]
         if req.custom_api_key is not None:
             key = req.custom_api_key.strip()
             # 空串视为「不修改」：前端不回显已保存的 Key，
             # 用户填完 Base URL/模型后直接点保存不应该把 Key 清空
             if key:
                 updates["CUSTOM_API_KEY"] = key
-                settings.CUSTOM_API_KEY = key
         if req.custom_model is not None:
             updates["CUSTOM_API_MODEL"] = req.custom_model.strip()
-            settings.CUSTOM_API_MODEL = updates["CUSTOM_API_MODEL"]
         if updates:
             update_env(updates)
+            for name, value in updates.items():
+                setattr(settings, name, value)
 
     # 旧版云提供商配置已从设置中移除；新服务均通过本地自定义服务配置管理。
     if provider in CLOUD_ENV_MAP:
@@ -450,14 +455,14 @@ def api_save_settings(req: SettingsRequest):
             key = req.cloud_api_key.strip()
             if key:  # 留空视为「不修改」，避免误清空已保存的 Key
                 updates[key_env] = key
-                setattr(settings, key_env, key)
         if req.cloud_base_url is not None:
             url = req.cloud_base_url.strip()
             if url:
                 updates[base_env] = url
-                setattr(settings, base_env, url)
         if updates:
             update_env(updates)
+            for name, value in updates.items():
+                setattr(settings, name, value)
 
     # 本地服务（Ollama / LM Studio）：设置页「模型提供商」直接改服务地址
     local_url_updates = {}
@@ -465,14 +470,14 @@ def api_save_settings(req: SettingsRequest):
         url = req.ollama_base_url.strip().rstrip("/")
         if url:
             local_url_updates["OLLAMA_BASE_URL"] = url
-            settings.OLLAMA_BASE_URL = url
     if req.lmstudio_base_url is not None:
         url = req.lmstudio_base_url.strip().rstrip("/")
         if url:
             local_url_updates["LMSTUDIO_BASE_URL"] = url
-            settings.LMSTUDIO_BASE_URL = url
     if local_url_updates:
         update_env(local_url_updates)
+        for name, value in local_url_updates.items():
+            setattr(settings, name, value)
 
     # 设置页研究默认参数（写入 ui_prefs.json）
     research_updates = {}
@@ -893,6 +898,29 @@ def _followup_worker(task_id: str, paper_id: str, llm, messages: list[dict], out
 # ---------------------------------------------------------------------------
 # 报告历史（列表 / 下载 / 删除）
 # ---------------------------------------------------------------------------
+# 文件本身不会原地修改，按 (mtime, size) 缓存有效性判断，避免列表请求反复读盘
+_REPORT_STATUS_CACHE: dict[str, tuple[tuple[int, int], bool]] = {}
+
+
+def _report_is_ok(fpath: str) -> bool:
+    try:
+        st = os.stat(fpath)
+    except OSError:
+        return False
+    stamp = (st.st_mtime_ns, st.st_size)
+    cached = _REPORT_STATUS_CACHE.get(fpath)
+    if cached and cached[0] == stamp:
+        return cached[1]
+    try:
+        with open(fpath, encoding="utf-8") as f:
+            head = f.read(2000)
+    except OSError:
+        return False
+    ok = _is_report_ok(head)
+    _REPORT_STATUS_CACHE[fpath] = (stamp, ok)
+    return ok
+
+
 @app.get("/api/reports")
 def api_list_reports():
     try:
@@ -902,17 +930,14 @@ def api_list_reports():
         )
     except OSError:
         files = []
-    reports = []
-    for fname in files:
-        fpath = os.path.join(REPORT_DIR, fname)
-        try:
-            with open(fpath, encoding="utf-8") as f:
-                head = f.read(2000)
-        except OSError:
-            continue
-        if not _is_report_ok(head):
-            continue  # 生成失败的报告不显示
-        reports.append({"name": fname})
+    paths = {os.path.join(REPORT_DIR, fname) for fname in files}
+    for stale_key in [key for key in _REPORT_STATUS_CACHE if key not in paths]:
+        _REPORT_STATUS_CACHE.pop(stale_key, None)
+    reports = [
+        {"name": fname}
+        for fname in files
+        if _report_is_ok(os.path.join(REPORT_DIR, fname))
+    ]
     return {"reports": reports}
 
 
@@ -958,20 +983,27 @@ app.include_router(paper_router)
 # ---------------------------------------------------------------------------
 # 静态前端（最后挂载，避免拦截 API）
 # ---------------------------------------------------------------------------
-_WEB_DIR = os.path.join(BASE_DIR, "web")
 if os.path.isdir(_WEB_DIR):
     app.mount("/", StaticFiles(directory=_WEB_DIR, html=True), name="web")
 
 
 @app.middleware("http")
-async def _no_cache_static(request: Request, call_next):
-    """静态页面/脚本不缓存：浏览器每次重新验证，避免长期使用旧版前端。
+async def _cache_static_assets(request: Request, call_next):
+    """index.html 不缓存；带内容哈希的静态资源长期缓存。
 
-    注意：仅对非 API 路径设置；API（/api/...）保持原有行为。
+    index.html 通过 ?v=<hash> 引用脚本和样式，构建后 URL 必变，
+    因此可对带 v 参数的资源启用 immutable 缓存，减少重复下载。
     """
     response = await call_next(request)
-    if not request.url.path.startswith("/api/"):
+    path = request.url.path
+    if path.startswith("/api/"):
+        return response
+    if path in ("/", "/index.html"):
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    elif request.query_params.get("v"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
 

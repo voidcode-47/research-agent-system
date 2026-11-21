@@ -6,6 +6,8 @@
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import re
+import hashlib
+import json
 
 from tools.academic_search import AcademicSearchTool
 from utils.logger import get_logger
@@ -13,6 +15,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 CACHE_DAYS = 7
+SEARCH_IDENTITY = {"sources": ["crossref", "openalex"], "ranking": 1, "language_policy": "default"}
 _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 _LATIN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9\-]+")
 
@@ -128,11 +131,18 @@ def find_similar(parsed: dict, requirement: dict | None = None, limit: int = 10,
             raise SimilarCancelled("相似论文检索已取消")
 
     check()
+    limit = max(1, min(int(limit or 10), 20))
+    terms = _query_terms(parsed)
+    identity = hashlib.sha256(json.dumps({
+        "queries": terms, "keywords": parsed.get("keywords") or [],
+        **SEARCH_IDENTITY,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
     if paper_id and not refresh:
         cached = store.load_similar(paper_id)
-        if _cache_fresh(cached):
+        if (_cache_fresh(cached) and cached.get("query_fingerprint") == identity
+                and int(cached.get("requested_limit") or 0) >= limit):
             report(100, "已使用 7 天内的缓存结果")
-            return {**cached, "cached": True}
+            return {**cached, "items": cached["items"][:limit], "cached": True}
 
     terms = _query_terms(parsed)
     if not terms:
@@ -226,6 +236,9 @@ def find_similar(parsed: dict, requirement: dict | None = None, limit: int = 10,
         "updated_at": _now(),
         "cached": False,
         "cache_days": CACHE_DAYS,
+        "query_fingerprint": identity,
+        "requested_limit": limit,
+        "search_identity": SEARCH_IDENTITY,
     }
     check()
     if paper_id:

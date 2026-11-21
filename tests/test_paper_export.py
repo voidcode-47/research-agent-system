@@ -45,6 +45,42 @@ def test_export_docx_keeps_native_table_and_list_items(monkeypatch):
     ]
 
 
+def test_export_docx_applies_apa_template_typography(monkeypatch):
+    monkeypatch.setattr(export, "_save_export", lambda *a, **k: None)
+    paragraphs, tables = _sample()
+    buf = export.export_docx(
+        "p_test", paragraphs, {"format": {"template": "apa"}}, tables,
+    )
+    doc = docx.Document(io.BytesIO(buf.getvalue()))
+    normal = doc.styles["Normal"]
+    assert normal.font.name == "Times New Roman"
+    assert normal.paragraph_format.line_spacing == 2.0
+
+
+def test_export_docx_tracked_writes_revisions(monkeypatch):
+    from docx.oxml.ns import qn
+
+    monkeypatch.setattr(export, "_save_export", lambda *a, **k: None)
+    base = [
+        {"id": "p1", "type": "body", "text": "旧内容。", "page": 1},
+        {"id": "p2", "type": "body", "text": "保留内容。", "page": 1},
+        {"id": "p3", "type": "body", "text": "将被删除。", "page": 1},
+    ]
+    current = [
+        {"id": "p1", "type": "body", "text": "新内容。", "page": 1},
+        {"id": "p2", "type": "body", "text": "保留内容。", "page": 1},
+    ]
+    monkeypatch.setattr(
+        export.store, "load_version", lambda pid, version: {"paragraphs": base},
+    )
+    buf = export.export_docx("p_test", current, None, None, tracked=True)
+    doc = docx.Document(io.BytesIO(buf.getvalue()))
+    xml = doc.element.xml
+    assert "<w:ins" in xml and "<w:del" in xml
+    assert "新内容。" in xml and "旧内容。" in xml and "将被删除。" in xml
+    assert doc.settings.element.find(qn("w:trackRevisions")) is not None
+
+
 def test_export_pdf_keeps_native_table(monkeypatch):
     monkeypatch.setattr(export, "_save_export", lambda *a, **k: None)
     paragraphs, tables = _sample()

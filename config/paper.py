@@ -134,6 +134,23 @@ DEFAULT_FORMAT: dict = {
     "table_caption_above": True,
 }
 
+# 选择模板时的排版默认值：需求中仍是通用默认值的字段按模板生效。
+TEMPLATE_FORMAT_DEFAULTS: dict[str, dict] = {
+    "generic_thesis": {},
+    "journal_cn": {},
+    "ieee": {
+        "font_body": "Times New Roman", "font_size_body_pt": 10,
+        "line_spacing": 1.0, "heading_numbering": "decimal",
+        "reference_style": "ieee",
+    },
+    "apa": {
+        "font_body": "Times New Roman", "font_size_body_pt": 12,
+        "line_spacing": 2.0, "heading_numbering": "none",
+        "reference_style": "apa",
+    },
+}
+
+
 DEFAULT_REQUIREMENT: dict = {
     "level": "",
     "format": DEFAULT_FORMAT,

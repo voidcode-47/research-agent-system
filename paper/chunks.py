@@ -401,7 +401,25 @@ def search(index: dict, question: str, max_chars: int = 3600,
     return "\n".join(lines), evidence
 
 
+_INDEX_CACHE: dict = {}
+_INDEX_CACHE_MAX = 8
+
+
 def build_qa_context(parsed: dict, question: str, max_chars: int = 3600,
-                     paragraphs: list[dict] | None = None) -> tuple[str, list[dict]]:
-    """问答入口：构建索引并检索，返回 (上下文, 依据列表)。"""
-    return search(build(parsed, paragraphs), question, max_chars)
+                     paragraphs: list[dict] | None = None,
+                     cache_key=None) -> tuple[str, list[dict]]:
+    """问答入口：构建索引并检索，返回 (上下文, 依据列表)。
+
+    传入 cache_key（如 (论文目录, 版本号)）时复用已构建的索引，
+    避免同一版本反复分词；索引只读，检索不会修改它。
+    """
+    if cache_key is None:
+        index = build(parsed, paragraphs)
+    else:
+        index = _INDEX_CACHE.get(cache_key)
+        if index is None:
+            index = build(parsed, paragraphs)
+            if len(_INDEX_CACHE) >= _INDEX_CACHE_MAX:
+                _INDEX_CACHE.pop(next(iter(_INDEX_CACHE)), None)
+            _INDEX_CACHE[cache_key] = index
+    return search(index, question, max_chars)

@@ -165,6 +165,63 @@ def test_template_recorded_in_stats():
     assert r["stats"]["template"] == "ieee"
 
 
+def test_apa_reference_without_type_marker_is_not_penalized():
+    parsed = _parsed(refs=[_para(
+        "p_0003", "reference",
+        "Smith, J. (2020). Deep learning for testing. Journal of Software, 12(3), 1-10.",
+    )])
+    r = check_format(parsed, {"template": "apa", "reference_style": "apa"})
+    assert not [i for i in r["issues"] if i["rule_id"] == "FMT-005"]
+    assert r["stats"]["reference_style"] == "apa"
+
+
+def test_gbt_reference_still_requires_type_marker():
+    parsed = _parsed(refs=[_para(
+        "p_0003", "reference", "[1] 张三. 软件测试方法. 计算机学报, 2020.",
+    )])
+    fmt5 = [i for i in check_format(parsed, {"reference_style": "gbt7714"})["issues"]
+            if i["rule_id"] == "FMT-005"]
+    assert fmt5 and "文献类型标识" in fmt5[0]["suggestion"]
+
+
+def test_table_caption_position_follows_option():
+    parsed = _parsed(captions=[_para("p_0003", "caption", "表 1 实验数据")])
+    parsed["paragraphs"].append(_para("p_0004", "table", ""))
+    parsed["tables"] = [{
+        "id": "t_0001", "caption": "表 1 实验数据", "paragraph_id": "p_0004",
+    }]
+    above = check_format(parsed, {"table_caption_above": True})
+    assert "FMT-004" not in _ids(above)
+    below = check_format(parsed, {"table_caption_above": False})
+    assert "FMT-004" in _ids(below)
+
+
+def test_english_template_skips_chinese_punctuation_rule():
+    parsed = _parsed(body=[_para(text="We use Python, and test it.")])
+    r = check_format(parsed, {"template": "ieee", "reference_style": "ieee"})
+    assert r["stats"]["language"] == "en"
+    assert "FMT-008" not in _ids(r)
+
+
+def test_chinese_heading_numbering_detects_gap():
+    sections = [
+        {"id": "s1", "level": 1, "title": "第一章 引言", "paragraph_ids": []},
+        {"id": "s2", "level": 1, "title": "第三章 方法", "paragraph_ids": []},
+    ]
+    r = check_format(_parsed(sections=sections), {"heading_numbering": "chinese"})
+    fmt3 = [i for i in r["issues"] if i["rule_id"] == "FMT-003"]
+    assert len(fmt3) == 1 and "从 1 跳到 3" in fmt3[0]["evidence"]
+
+
+def test_heading_numbering_none_skips_gap_check():
+    sections = [
+        {"id": "s1", "level": 1, "title": "引言", "paragraph_ids": []},
+        {"id": "s2", "level": 1, "title": "方法", "paragraph_ids": []},
+    ]
+    r = check_format(_parsed(sections=sections), {"heading_numbering": "none"})
+    assert "FMT-003" not in _ids(r)
+
+
 @pytest.mark.parametrize("number", ["999999999", "9" * 5000], ids=["large", "overlong"])
 def test_citation_check_is_bounded_for_untrusted_numbers(monkeypatch, number):
     def bounded_range(*args):

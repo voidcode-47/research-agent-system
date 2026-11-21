@@ -11,6 +11,12 @@ _REF_TYPE_RE = re.compile(r"\[\s*(J|M|C|D|N|S|P|R|Z|A|G|EB/OL|DB/OL|J/OL|M/OL)\s
 _YEAR_RE = re.compile(r"(19|20)\d{2}")
 _CITE_RE = re.compile(r"\[\s*(\d+)\s*\]")
 _HALF_PUNCT_RE = re.compile(r"[\u4e00-\u9fff][,.]|[,.]\s*[\u4e00-\u9fff]")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_CN_HEADING_RE = re.compile(r"^\s*第([一二三四五六七八九十百]+)[章节篇]")
+_CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+              "六": 6, "七": 7, "八": 8, "九": 9}
+
+_REF_STYLE_LABELS = {"gbt7714": "GB/T 7714", "apa": "APA", "ieee": "IEEE"}
 
 _SEVERITY_DEDUCT = {"high": 8, "medium": 4, "low": 2}
 
@@ -43,13 +49,56 @@ def _first_body_pid(section: dict, body_ids: set[str]) -> str:
     )
 
 
-def _numbering_level1(sections: list[dict]) -> list[tuple[int, dict]]:
+def _cn_number(text: str) -> int | None:
+    """解析 1~999 的中文序号（一、十二、二十三、一百零五）。"""
+    total = 0
+    current = 0
+    for ch in text:
+        if ch in _CN_DIGITS:
+            current = _CN_DIGITS[ch]
+        elif ch == "十":
+            total += (current or 1) * 10
+            current = 0
+        elif ch == "百":
+            total += (current or 1) * 100
+            current = 0
+        else:
+            return None
+    return total + current or None
+
+
+def _numbering_level1(sections: list[dict],
+                      style: str = "decimal") -> list[tuple[int, dict]]:
+    """按所选标题编号样式提取一级章节序号；样式为 none 时不检查连续编号。"""
+    if style == "none":
+        return []
     out = []
     for s in sections:
-        m = re.match(r"^\s*(\d{1,3})(?:\s|$)", s.get("title") or "")
-        if m and int(s.get("level") or 1) == 1:
-            out.append((int(m.group(1)), s))
+        title = s.get("title") or ""
+        if int(s.get("level") or 1) != 1:
+            continue
+        if style == "chinese":
+            m = _CN_HEADING_RE.match(title)
+            number = _cn_number(m.group(1)) if m else None
+        else:
+            m = re.match(r"^\s*(\d{1,3})(?:\s|$)", title)
+            number = int(m.group(1)) if m else None
+        if number:
+            out.append((number, s))
     return out
+
+
+def _language(parsed: dict, spec: dict) -> str:
+    """模板优先决定语言；自定义模板时按正文/摘要的中文字符判断。"""
+    if spec.get("template") in ("ieee", "apa"):
+        return "en"
+    sample = " ".join([
+        str(parsed.get("abstract") or ""),
+        " ".join(str(k) for k in parsed.get("keywords") or []),
+        " ".join(str(p.get("text") or "")[:200]
+                 for p in (parsed.get("paragraphs") or [])[:10]),
+    ])
+    return "zh" if _CJK_RE.search(sample) else "en"
 
 
 def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
@@ -65,6 +114,9 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
     keywords = parsed.get("keywords") or []
     abstract = parsed.get("abstract") or ""
     issues: list[dict] = []
+    language = _language(parsed, spec)
+    ref_style = str(spec.get("reference_style") or "gbt7714").lower()
+    numbering = str(spec.get("heading_numbering") or "decimal")
 
     fig_caps, tab_caps = set(), set()
     for c in captions:
@@ -110,7 +162,7 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
         prev_level = level
 
     # FMT-003 章节编号断档
-    numbered = _numbering_level1(sections)
+    numbered = _numbering_level1(sections, numbering)
     for (a_num, a_s), (b_num, b_s) in zip(numbered, numbered[1:]):
         if b_num > a_num + 1:
             first_pid = _first_body_pid(b_s, body_ids)
@@ -146,10 +198,31 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
                     "图表题注与正文引用应一一对应",
                 ))
 
-    # FMT-005 参考文献条目缺文献类型标识或年份
+    # FMT-004 表题注位置与所选排版选项不一致
+    order = {p.get("id"): i for i, p in enumerate(paragraphs)}
+    caption_pos = {(p.get("text") or "").strip(): i for i, p in enumerate(paragraphs)
+                   if p.get("type") == "caption"}
+    caption_above = bool(spec.get("table_caption_above", True))
+    for t in parsed.get("tables") or []:
+        caption = (t.get("caption") or "").strip()
+        anchor = order.get(t.get("paragraph_id") or "")
+        cap_pos = caption_pos.get(caption)
+        if not caption or anchor is None or cap_pos is None:
+            continue
+        is_above = cap_pos < anchor
+        if is_above != caption_above:
+            issues.append(_issue(
+                "FMT-004", "low", t.get("page"), t.get("paragraph_id"),
+                f"表题注「{caption}」位于表格{'上方' if is_above else '下方'}",
+                "表题注应置于表格上方" if caption_above else "表题注应置于表格下方",
+                "表题注位置规范",
+            ))
+
+    # FMT-005 参考文献条目缺当前样式要求的要素
+    # GB/T 7714 要求文献类型标识与年份；APA / IEEE 只需年份，不能因缺 [J] 扣分。
     for p in refs:
         text = p.get("text") or ""
-        lacks_type = not _REF_TYPE_RE.search(text)
+        lacks_type = ref_style == "gbt7714" and not _REF_TYPE_RE.search(text)
         lacks_year = not _YEAR_RE.search(text)
         if lacks_type or lacks_year:
             missing_bits = []
@@ -160,17 +233,26 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
             issues.append(_issue(
                 "FMT-005", "medium", p.get("page"), "",
                 text, "补充" + "与".join(missing_bits),
-                "GB/T 7714 参考文献著录规则",
+                f"{_REF_STYLE_LABELS.get(ref_style, ref_style)} 参考文献著录规则",
             ))
 
-    # FMT-006 摘要字数越界
+    # FMT-006 摘要篇幅越界（中文按字、英文按词）
     n_abs = len(re.sub(r"\s", "", abstract))
-    if n_abs and (n_abs < 200 or n_abs > 1000):
+    n_words = len(re.findall(r"[A-Za-z][A-Za-z'\-]*", abstract))
+    if language == "zh":
+        if n_abs and (n_abs < 200 or n_abs > 1000):
+            issues.append(_issue(
+                "FMT-006", "medium", 1, "",
+                f"摘要约 {n_abs} 字",
+                "摘要控制在 200~1000 字（学位论文可适当放宽）",
+                "中文摘要篇幅规范",
+            ))
+    elif n_words and (n_words < 100 or n_words > 400):
         issues.append(_issue(
             "FMT-006", "medium", 1, "",
-            f"摘要约 {n_abs} 字",
-            "摘要控制在 200~1000 字（学位论文可适当放宽）",
-            "摘要篇幅规范",
+            f"摘要约 {n_words} 词",
+            "摘要控制在 100~400 词（学位论文可适当放宽）",
+            "英文摘要篇幅规范",
         ))
 
     # FMT-007 关键词数量不在 3~8
@@ -182,8 +264,8 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
             "关键词数量规范",
         ))
 
-    # FMT-008 中文句子混用半角逗号/句号
-    for p in body:
+    # FMT-008 中文句子混用半角逗号/句号（仅中文论文适用）
+    for p in body if language == "zh" else []:
         text = p.get("text") or ""
         if _HALF_PUNCT_RE.search(text):
             m = _HALF_PUNCT_RE.search(text)
@@ -268,5 +350,9 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
         "medium": counts["medium"],
         "low": counts["low"],
         "template": spec.get("template"),
+        "language": language,
+        "reference_style": ref_style,
+        "heading_numbering": numbering,
+        "abstract_words": n_words,
     }
     return {"score": score, "summary": summary, "issues": issues, "stats": stats}

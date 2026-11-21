@@ -17,6 +17,7 @@ import zipfile
 import zlib
 
 from paper import store
+from paper import contracts
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -351,8 +352,16 @@ def _load_archive(path: str) -> dict[int, dict]:
         if n < 0 or not isinstance(value, dict) \
                 or not isinstance(value.get("paragraphs"), list):
             raise BackupError(f"备份中的版本归档 v{n} 已损坏")
+        _validate_contract(value, contracts.Version, f"归档版本 v{n}")
         out[n] = value
     return out
+
+
+def _validate_contract(data, schema, label):
+    try:
+        contracts.validate(data, schema, label)
+    except ValueError as error:
+        raise BackupError(str(error)) from error
 
 
 def _validate_paper_tree(staging: str, manifest: dict) -> tuple[dict, dict]:
@@ -379,6 +388,7 @@ def _validate_paper_tree(staging: str, manifest: dict) -> tuple[dict, dict]:
         raise BackupError("parsed.json 缺少段落列表")
     if not parsed["paragraphs"]:
         raise BackupError("parsed.json 的段落列表为空")
+    _validate_contract(parsed, contracts.Parsed, "parsed.json")
 
     loose: dict[int, dict] = {}
     versions_dir = os.path.join(paper_dir, "versions")
@@ -393,6 +403,7 @@ def _validate_paper_tree(staging: str, manifest: dict) -> tuple[dict, dict]:
                     or not isinstance(data.get("paragraphs"), list):
                 raise BackupError(f"版本 v{n} 结构非法")
             loose[n] = data
+            _validate_contract(data, contracts.Version, f"版本 v{n}")
     archive_path = os.path.join(versions_dir, "archive.json.gz")
     archived = _load_archive(archive_path) if os.path.exists(archive_path) else {}
     all_versions = set(loose) | set(archived)
@@ -409,6 +420,9 @@ def _validate_paper_tree(staging: str, manifest: dict) -> tuple[dict, dict]:
         path = os.path.join(paper_dir, name)
         if os.path.exists(path) and not isinstance(_load_json(path, label), dict):
             raise BackupError(f"{label} 不是对象")
+        if os.path.exists(path) and name in ("requirement.json", "rewrite_guide.json"):
+            _validate_contract(_load_json(path, label),
+                               contracts.Requirement if name == "requirement.json" else contracts.Guide, label)
     analysis_dir = os.path.join(paper_dir, "analysis")
     if os.path.isdir(analysis_dir):
         for name in os.listdir(analysis_dir):

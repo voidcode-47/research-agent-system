@@ -1,3 +1,4 @@
+# ruff: noqa: F401, F811 — pytest fixture 通过导入注入，ruff 会误判为重定义
 import contextvars
 import json
 import threading

@@ -163,7 +163,7 @@ def parse_anthropic_response(data: dict) -> ChatResponse:
     completion = int(usage.get("output_tokens", 0))
     return ChatResponse("\n".join(text), tool_calls, {
         "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion,
-    }, raw=data)
+    }, raw=data, finish_reason=str(data.get("stop_reason") or ""))
 
 
 def parse_gemini_response(data: dict) -> ChatResponse:
@@ -187,7 +187,7 @@ def parse_gemini_response(data: dict) -> ChatResponse:
     total = int(usage.get("totalTokenCount", prompt + completion))
     return ChatResponse("\n".join(text), tool_calls, {
         "prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total,
-    }, raw=data)
+    }, raw=data, finish_reason=str(candidates[0].get("finishReason") or "") if candidates else "")
 
 
 class CustomProtocolLLM(BaseLLM):
@@ -218,17 +218,26 @@ class CustomProtocolLLM(BaseLLM):
         response.raise_for_status()
         return response
 
+    def close(self) -> None:
+        """关闭底层 HTTP 连接池。"""
+        try:
+            self.client.close()
+        except Exception:
+            pass
+
     def chat(self, messages: list[dict], tools: Optional[list[dict]] = None, temperature: float = 0.7, **options) -> ChatResponse:
         if self.protocol == "anthropic":
             payload = anthropic_messages(messages, tools, self.model, temperature)
             if options.get("max_tokens"):
                 payload["max_tokens"] = options["max_tokens"]
-            response = self._request("POST", self._anthropic_url("messages"), json=payload)
+            response = self._request("POST", self._anthropic_url("messages"), json=payload,
+                                     timeout=options.get("timeout", 60.0))
             return parse_anthropic_response(response.json())
         payload = gemini_contents(messages, tools, temperature)
         if options.get("max_tokens"):
             payload["generationConfig"]["maxOutputTokens"] = options["max_tokens"]
-        response = self._request("POST", self._gemini_url(), json=payload)
+        response = self._request("POST", self._gemini_url(), json=payload,
+                                 timeout=options.get("timeout", 60.0))
         return parse_gemini_response(response.json())
 
     def stream_chat(self, messages: list[dict], tools: Optional[list[dict]] = None, temperature: float = 0.7, **options) -> Iterator[str]:
@@ -243,28 +252,42 @@ class CustomProtocolLLM(BaseLLM):
             payload["generationConfig"]["maxOutputTokens"] = options.get("max_tokens", 4096)
             url = self._gemini_url("streamGenerateContent") + "?alt=sse"
         headers = {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"} if self.protocol == "anthropic" else {"x-goog-api-key": self.api_key}
-        try:
-            with self.client.stream("POST", url, json=payload, headers=headers) as response:
-                response.raise_for_status()
-                for line in response.iter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    try:
-                        data = json.loads(line[5:].strip())
-                    except json.JSONDecodeError:
-                        continue
-                    if self.protocol == "anthropic":
-                        delta = data.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            yield delta.get("text", "")
-                    else:
-                        candidates = data.get("candidates") or []
-                        parts = (candidates[0].get("content") or {}).get("parts", []) if candidates else []
-                        for part in parts:
-                            if part.get("text"):
-                                yield part["text"]
-        except httpx.HTTPError as exc:
-            yield f"\n[流式输出失败: {exc}]"
+        finished = False
+        reason = ""
+        with self.client.stream("POST", url, json=payload, headers=headers,
+                                timeout=options.get("timeout", 60.0)) as response:
+            response.raise_for_status()
+            for line in response.iter_lines():
+                if not line.startswith("data:"):
+                    continue
+                try:
+                    data = json.loads(line[5:].strip())
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("模型流式响应包含无效 JSON") from exc
+                if not isinstance(data, dict):
+                    raise RuntimeError("模型流式响应不是对象")
+                if data.get("error") or data.get("type") == "error":
+                    raise RuntimeError("模型流式服务返回错误")
+                if self.protocol == "anthropic":
+                    delta = data.get("delta") or {}
+                    if delta.get("type") == "text_delta":
+                        yield delta.get("text", "")
+                    if delta.get("stop_reason"):
+                        reason = delta["stop_reason"]
+                    if data.get("type") == "message_stop":
+                        finished = True
+                else:
+                    candidates = data.get("candidates") or []
+                    candidate = candidates[0] if candidates else {}
+                    for part in (candidate.get("content") or {}).get("parts", []):
+                        if part.get("text"):
+                            yield part["text"]
+                    if candidate.get("finishReason"):
+                        reason = candidate["finishReason"]
+                        finished = True
+            allowed = ("end_turn", "stop_sequence") if self.protocol == "anthropic" else ("STOP",)
+            if not finished or reason not in allowed:
+                raise RuntimeError(f"模型流式响应未完整结束（{reason or '连接中断'}）")
 
     def ping(self) -> bool:
         try:
