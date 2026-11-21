@@ -180,3 +180,75 @@ def test_reservations_count_against_check_and_preflight(q):
     quota.release(token)
     quota.check()
     quota.preflight(3)
+
+
+def test_immediate_calls_cannot_spend_another_tasks_reservation(q):
+    token = quota.reserve(3)
+    with pytest.raises(quota.QuotaExceeded):
+        quota.consume()
+    assert quota.usage_snapshot()["used"] == 0
+    ctx = quota.set_reservation(token)
+    try:
+        assert quota.consume(amount=3) == 3
+    finally:
+        quota.reset_reservation(ctx)
+
+
+def test_multiple_call_charge_must_fit_remaining_quota(q):
+    quota.consume(amount=2)
+    with pytest.raises(quota.QuotaExceeded):
+        quota.consume(amount=2)
+    assert quota.usage_snapshot()["used"] == 2
+
+
+def test_last_reserved_call_refunds_into_the_same_task(q):
+    token = quota.reserve(1)
+    ctx = quota.set_reservation(token)
+    try:
+        quota.consume()
+        quota.refund()
+        assert quota.usage_snapshot()["reserved"] == 1
+        assert quota.consume() == 1
+        with pytest.raises(quota.QuotaExceeded, match="预留额度不足"):
+            quota.consume()
+    finally:
+        quota.reset_reservation(ctx)
+        quota.release(token)
+
+
+def test_charge_receipt_refunds_original_day_only_once(q, monkeypatch):
+    receipt = quota.charge()
+    monkeypatch.setattr(quota, "_today", lambda: "2026-01-03")
+    quota.consume(amount=2)
+    quota.refund(charge=receipt)
+    quota.refund(charge=receipt)
+    history = {row["date"]: row["used"] for row in quota.usage_snapshot()["history"]}
+    assert history == {"2026-01-02": 0, "2026-01-03": 2}
+
+
+def test_yesterdays_reservation_is_rechecked_before_execution(q, monkeypatch):
+    token = quota.reserve(2)
+    monkeypatch.setattr(quota, "_today", lambda: "2026-01-03")
+    assert quota.usage_snapshot()["reserved"] == 0
+    quota.consume(amount=3)
+    ctx = quota.set_reservation(token)
+    try:
+        with pytest.raises(quota.QuotaExceeded):
+            quota.consume()
+    finally:
+        quota.reset_reservation(ctx)
+
+
+def test_failed_quota_persistence_does_not_spend_reservation(q, monkeypatch):
+    token = quota.reserve(2)
+    ctx = quota.set_reservation(token)
+    try:
+        def fail(*args):
+            raise OSError("disk full")
+        monkeypatch.setattr(quota, "_save", fail)
+        with pytest.raises(OSError):
+            quota.consume()
+        assert quota.usage_snapshot()["reserved"] == 2
+        assert quota.usage_snapshot()["used"] == 0
+    finally:
+        quota.reset_reservation(ctx)

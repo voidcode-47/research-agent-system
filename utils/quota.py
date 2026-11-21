@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import uuid
+from dataclasses import dataclass
 
 from config.settings import settings
 from utils.logger import get_logger
@@ -23,6 +24,18 @@ _CURRENT_RESERVATION = contextvars.ContextVar("quota_reservation", default=None)
 
 class QuotaExceeded(Exception):
     """当日配额用尽。"""
+
+
+@dataclass
+class Charge:
+    """一次实际扣款的凭据；退款固定原日期，重复退款不会扣到其他调用。"""
+
+    key: str
+    day: str
+    token: str | None
+    amount: int
+    used: int
+    refunded: int = 0
 
 
 def _today() -> str:
@@ -51,6 +64,7 @@ def _save(data: dict) -> None:
         os.replace(tmp, QUOTA_PATH)
     except OSError as e:
         logger.warning(f"配额文件写入失败: {e}")
+        raise
     finally:
         if os.path.exists(tmp):
             try:
@@ -84,10 +98,11 @@ def _used(data: dict, day: str, key: str) -> int:
 
 
 def _reserved_total(key: str) -> int:
+    today = _today()
     return sum(
         int(item.get("remaining") or 0)
         for item in _reservations.values()
-        if item.get("key") == key
+        if item.get("key") == key and item.get("day") == today
     )
 
 
@@ -114,6 +129,7 @@ def reserve(amount: int, key: str = "local", unlimited: bool = False) -> str | N
             "key": key,
             "remaining": int(amount),
             "original": int(amount),
+            "day": today,
         }
         return token
 
@@ -172,14 +188,25 @@ def preflight(amount: int, key: str = "local", unlimited: bool = False) -> None:
 
 def consume(key: str = "local", amount: int = 1, unlimited: bool = False) -> int:
     """消耗配额；返回消耗后的当日已用次数。管理员不限额度时不计数。"""
+    receipt = charge(key, amount, unlimited)
+    return receipt.used if receipt is not None else 0
+
+
+def charge(key: str = "local", amount: int = 1,
+           unlimited: bool = False) -> Charge | None:
+    """原子扣款并返回退款凭据；旧日预留执行前重新检查当日容量。"""
     if unlimited:
-        return 0
+        return None
+    if amount <= 0:
+        raise ValueError("扣款次数必须大于 0")
     today = _today()
     with _lock:
         data = _prune(_load(), today)
         used = _used(data, today, key)
         token = _CURRENT_RESERVATION.get()
         reservation = _reservations.get(token) if token else None
+        if token and (not reservation or reservation.get("key") != key):
+            raise QuotaExceeded("任务预留额度已释放，请重新发起任务。")
         if reservation and reservation.get("key") == key:
             remaining = int(reservation.get("remaining") or 0)
             if remaining < amount:
@@ -187,47 +214,58 @@ def consume(key: str = "local", amount: int = 1, unlimited: bool = False) -> int
                     f"任务预留额度不足：还需 {amount} 次，仅剩 {remaining} 次；"
                     "请重新发起任务。"
                 )
-            reservation["remaining"] = remaining - amount
-            if reservation["remaining"] <= 0:
-                _reservations.pop(token, None)
-            data.setdefault(today, {})[key] = used + amount
-            _save(data)
-            return used + amount
-        if used >= settings.DAILY_QUOTA:
+            needed = (remaining if reservation.get("day") != today else 0)
+        else:
+            needed = amount
+        if used + _reserved_total(key) + needed > settings.DAILY_QUOTA:
             raise QuotaExceeded(
                 f"今日模型调用配额已用完（{settings.DAILY_QUOTA} 次/天），请明天再试。"
             )
         data.setdefault(today, {})[key] = used + amount
         _save(data)
-        return used + amount
+        if reservation:
+            reservation["remaining"] = remaining - amount
+            reservation["day"] = today
+        return Charge(key, today, token, amount, used + amount)
 
 
-def refund(key: str = "local", amount: int = 1) -> int:
+def refund(key: str = "local", amount: int = 1,
+           *, charge: Charge | None = None) -> int:
     """退还配额（失败回滚），不会低于 0。"""
     if amount <= 0:
         return 0
-    today = _today()
+    day = charge.day if charge is not None else _today()
+    key = charge.key if charge is not None else key
     with _lock:
         data = _load()
-        used = _used(data, today, key)
-        token = _CURRENT_RESERVATION.get()
+        used = _used(data, day, key)
+        if charge is not None:
+            amount = min(amount, charge.amount - charge.refunded)
+        amount = min(amount, used)
+        if amount <= 0:
+            return used
+        token = charge.token if charge is not None else _CURRENT_RESERVATION.get()
         reservation = _reservations.get(token) if token else None
-        if reservation and reservation.get("key") == key:
+        data.setdefault(day, {})[key] = used - amount
+        _save(data)
+        if (reservation and reservation.get("key") == key
+                and reservation.get("day") == day):
             reservation["remaining"] = min(
                 int(reservation.get("original") or 0),
                 int(reservation.get("remaining") or 0) + amount,
             )
-        data.setdefault(today, {})[key] = max(0, used - amount)
-        _save(data)
-        return data[today][key]
+        if charge is not None:
+            charge.refunded += amount
+        return data[day][key]
 
 
 def usage_snapshot(key: str = "local", unlimited: bool = False) -> dict:
     """配额快照：当日用量、剩余量以及最近 7 天历史。"""
     today = _today()
-    data = _load()
-    used = _used(data, today, key)
-    reserved = _reserved_total(key)
+    with _lock:
+        data = _load()
+        used = _used(data, today, key)
+        reserved = _reserved_total(key)
     if unlimited:
         return {
             "date": today,

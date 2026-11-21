@@ -115,7 +115,7 @@ class LLMGateway:
 
         # consume 在锁内检查并扣减，超限时不发起模型调用；管理员不占用配额
         unlimited = auth.is_admin()
-        quota.consume(self.quota_key, unlimited=unlimited)
+        charge = quota.charge(self.quota_key, unlimited=unlimited)
         charged = not unlimited
         # 一次逻辑调用只扣一次；真正的模型输出（即便 JSON 不合格）计入额度，
         # 提供商报错、限流或连接失败等没有可用输出的情况在最终失败时退还。
@@ -149,7 +149,7 @@ class LLMGateway:
                 return data
             except _ModelCallFailed:
                 if charged and not completion_received:
-                    self._refund()
+                    self._refund(charge)
                 raise
             except Exception as e:
                 last_err = e
@@ -163,12 +163,12 @@ class LLMGateway:
                         ),
                     }]
         if charged and not completion_received:
-            self._refund()
+            self._refund(charge)
         raise RuntimeError(f"模型任务 {task_type} 执行失败：{last_err}")
 
-    def _refund(self) -> None:
+    def _refund(self, charge: quota.Charge | None) -> None:
         try:
-            quota.refund(self.quota_key)
+            quota.refund(self.quota_key, charge=charge)
         except Exception as e:
             logger.warning(f"配额退还失败: {e}")
 
