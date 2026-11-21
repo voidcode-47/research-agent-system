@@ -1,5 +1,6 @@
 """格式规则引擎：10 条纯函数规则，输出可直接用于前端定位的问题列表。"""
 import re
+from itertools import islice
 
 from config.paper import DEFAULT_FORMAT
 
@@ -205,24 +206,34 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
             ))
 
     # FMT-010 引用编号不连续或超出参考文献条数
+    ref_count = len(refs)
     cited = []
+    invalid = []
+    upper_text = str(ref_count)
     for p in body:
         for m in _CITE_RE.finditer(p.get("text") or ""):
-            cited.append((int(m.group(1)), p))
-    if cited:
-        ref_count = len(refs)
-        max_cite, max_para = max(cited, key=lambda x: x[0])
-        if max_cite > ref_count:
+            number = m.group(1).lstrip("0") or "0"
+            # Compare decimal strings before int(): uploaded text can contain
+            # arbitrarily long numbers, beyond Python's integer conversion limit.
+            if (number == "0" or len(number) > len(upper_text)
+                    or len(number) == len(upper_text) and number > upper_text):
+                invalid.append((number[:60], p))
+            else:
+                cited.append((int(number), p))
+    if cited or invalid:
+        if invalid:
+            label, max_para = invalid[0]
             issues.append(_issue(
                 "FMT-010", "high", max_para.get("page"), max_para.get("id"),
-                f"引用编号 [{max_cite}] 超出参考文献条数（{ref_count} 条）",
+                f"引用编号 [{label}] 超出参考文献条数或非法（{ref_count} 条）",
                 "补充对应参考文献，或修正正文引用编号",
                 "引用编号应与参考文献一一对应",
             ))
-        nums = sorted({n for n, _ in cited})
-        gaps = [n for n in range(1, (max(nums) if nums else 0) + 1) if n not in nums]
+        nums = {n for n, _ in cited}
+        upper = ref_count if invalid else max(nums, default=0)
+        gaps = list(islice((n for n in range(1, upper + 1) if n not in nums), 10))
         if gaps:
-            first = next(p for n, p in cited if n == max(nums))
+            first = (invalid or cited)[0][1]
             issues.append(_issue(
                 "FMT-010", "medium", first.get("page"), first.get("id"),
                 "缺失引用编号：" + "、".join(str(g) for g in gaps[:10]),

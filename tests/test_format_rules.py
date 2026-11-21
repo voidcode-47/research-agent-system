@@ -2,6 +2,10 @@
 """格式规则引擎：10 条规则与评分。"""
 from rules.format_rules import check_format
 
+import builtins
+import pytest
+from rules import format_rules
+
 ABSTRACT_OK = "本文围绕深度学习的软件测试方法展开研究。" * 12  # 240 字
 KEYWORDS_OK = ["深度学习", "软件测试", "综述"]
 
@@ -159,3 +163,30 @@ def test_score_is_clamped_at_zero():
 def test_template_recorded_in_stats():
     r = check_format(_parsed(), {"template": "ieee"})
     assert r["stats"]["template"] == "ieee"
+
+
+@pytest.mark.parametrize("number", ["999999999", "9" * 5000], ids=["large", "overlong"])
+def test_citation_check_is_bounded_for_untrusted_numbers(monkeypatch, number):
+    def bounded_range(*args):
+        values = builtins.range(*args)
+        assert len(values) <= 1000, "citation value must not control iteration size"
+        return values
+
+    monkeypatch.setattr(format_rules, "range", bounded_range, raising=False)
+    result = check_format(_parsed(
+        body=[_para(text=f"已有研究[{number}]。")],
+        refs=[_para("ref", "reference", "[1] 作者. 方法[J]. 学报, 2024.")],
+    ))
+    issues = [i for i in result["issues"] if i["rule_id"] == "FMT-010"]
+    assert any(i["severity"] == "high" for i in issues)
+    assert len(issues) <= 2
+
+
+def test_citation_gaps_only_list_available_reference_numbers():
+    result = check_format(_parsed(
+        body=[_para(text="已有研究[999]。")],
+        refs=[_para("ref", "reference", "[1] 作者. 方法[J]. 学报, 2024.")],
+    ))
+    gap = next(i for i in result["issues"]
+               if i["rule_id"] == "FMT-010" and i["severity"] == "medium")
+    assert gap["evidence"] == "缺失引用编号：1"
