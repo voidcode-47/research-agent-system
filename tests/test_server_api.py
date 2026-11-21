@@ -2,6 +2,7 @@
 """server.py（FastAPI Web 服务）API 层测试。"""
 from unittest.mock import patch
 from urllib.parse import quote
+import threading
 
 import pytest
 
@@ -21,6 +22,7 @@ def _admin_session(tmp_path, monkeypatch):
     monkeypatch.setattr(custom_providers, "CUSTOM_PROVIDERS_PATH", str(tmp_path / "custom_providers.json"))
     monkeypatch.setattr(custom_providers, "ENV_PATH", str(tmp_path / ".env"))
     monkeypatch.setattr(server.settings, "CUSTOM_API_BASE_URL", "")
+    monkeypatch.setattr(server.settings, "PAPER_DATA_DIR", str(tmp_path / "papers"))
     auth.reset_state()
     client.cookies.set(auth.COOKIE_NAME, auth.create_session("admin"))
     yield
@@ -199,17 +201,17 @@ def test_research_unknown_task():
 
 
 def test_research_failed_report_not_saved():
-    """失败报告（限流文案）应标记 failed 且不带 report。"""
+    """失败报告使用统一 error 终态且不带 report。"""
+    done = threading.Event()
     def _fake_worker(task_id, req):
-        server.RESEARCH_TASKS[task_id].update(
-            status="failed",
-            error="⚠️ API 限流（请求过于频繁）：429",
-        )
+        server.paper_api._fail(server.RESEARCH_TASKS[task_id], RuntimeError("API 限流：429"))
+        done.set()
 
     with patch("server._run_research_worker", _fake_worker):
         r = client.post("/api/research", json={"topic": "t"})
+        assert done.wait(3)
     st = client.get(f"/api/research/{r.json()['task_id']}").json()
-    assert st["status"] == "failed"
+    assert st["status"] == "error"
     assert st["report"] is None
 
 

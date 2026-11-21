@@ -147,6 +147,8 @@ DEFAULT_REQUIREMENT: dict = {
 # LLM 任务白名单（网关只允许这些 task_type）
 # ---------------------------------------------------------------------------
 LLM_TASKS: dict[str, dict] = {
+    "research_report": {"label": "文献调研报告", "max_tokens": 3500},
+    "research_followup": {"label": "调研报告追问", "max_tokens": 1024},
     "intake_extract": {"label": "上传信息提取", "max_tokens": 800},
     "level_diagnose": {"label": "论文层次诊断", "max_tokens": 2500},
     "feasibility": {"label": "内容可实现性评估", "max_tokens": 2500},

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import server
+from utils import quota
 from llm.base import ChatResponse
 from server import ResearchRequest
 
@@ -56,6 +57,9 @@ REFS = [
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "REPORT_DIR", str(tmp_path))
+    monkeypatch.setattr(server.settings, "PAPER_DATA_DIR", str(tmp_path / "papers"))
+    monkeypatch.setattr(server.settings, "DAILY_QUOTA", 100)
+    monkeypatch.setattr(quota, "QUOTA_PATH", str(tmp_path / "quota.json"))
     monkeypatch.setattr(server, "load_prefs", lambda: {"provider": "custom", "model": "test-model"})
     server.RESEARCH_TASKS.clear()
     yield tmp_path

@@ -7,6 +7,8 @@
     python server.py            # 等价于 uvicorn server:app --host 127.0.0.1 --port 8501
 """
 import datetime
+import asyncio
+import queue
 import os
 import re
 import threading
@@ -24,6 +26,9 @@ from pydantic import BaseModel
 from config.settings import settings
 from config.llm_config import PROVIDER_CONFIG, get_provider_config, list_providers
 from llm.factory import LLMFactory
+from llm.gateway import LLMGateway
+from api import paper as paper_api
+from utils import quota
 from utils import auth, frontend_assets, runtime_lock
 from utils import custom_providers
 from utils.logger import get_logger
@@ -606,29 +611,26 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
     task = RESEARCH_TASKS[task_id]
 
     def log(stage: str, msg: str, progress: int | None = None):
-        task["stage"] = stage
-        if progress is not None:
-            task["progress"] = max(0, min(100, int(progress)))
-        task["logs"].append(msg)
-        task["updated_at"] = datetime.datetime.now().strftime("%H:%M:%S")
+        with paper_api._TASK_LOCK:
+            if task.get("status") in _TERMINAL_TASK_STATUS:
+                return
+            task["stage"] = stage
+            if progress is not None:
+                task["progress"] = max(0, min(100, int(progress)))
+            task["logs"].append(msg)
+            task["updated_at"] = datetime.datetime.now().strftime("%H:%M:%S")
 
     def cancelled() -> bool:
         return bool(task.get("cancel_requested")) or task.get("status") == "cancelled"
 
     def finish_cancelled():
-        task["status"] = "cancelled"
-        task["stage"] = "cancelled"
-        task["cancel_requested"] = True
-        if not any("已取消" in m for m in task["logs"]):
-            task["logs"].append("⏹ 已取消调研")
-        task["updated_at"] = datetime.datetime.now().strftime("%H:%M:%S")
+        paper_api._finish(task, "cancelled", message="⏹ 已取消调研")
 
     try:
         log("starting", f"🔄 开始调研：{req.topic}", 3)
 
-        prefs = load_prefs()
-        provider = req.provider or prefs.get("provider") or settings.DEFAULT_LLM_PROVIDER
-        model = req.model or prefs.get("model") or ""
+        provider = req.provider or settings.DEFAULT_LLM_PROVIDER
+        model = req.model or ""
         llm = LLMFactory.create(provider, model or None)
         log("starting", f"🤖 模型：{model or provider}")
 
@@ -697,20 +699,21 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
                 ),
             },
         ]
-        resp = llm.chat(messages, temperature=0.35,
-                        max_tokens=3500 if req.detailed else 2200,
-                        timeout=180)
+        content = LLMGateway(llm).run(
+            "research_report", messages, temperature=0.35,
+            max_tokens=3500 if req.detailed else 2200, timeout=180,
+            expect_json=False,
+            validator=lambda text: len(text.strip()) >= 80 and _is_report_ok(text),
+        ).strip()
         if cancelled():
             finish_cancelled()
             return
-        content = (resp.content or "").strip()
         if not content:
             raise RuntimeError("模型未返回报告内容，请重试或检查设置中的模型配置。")
         if not _is_report_ok(content):
             raise RuntimeError(content[:200])
         if len(content) < 80:
             raise RuntimeError("模型返回内容过短，未能生成有效报告，请重试。")
-        task["progress"] = 90
         log("save", "💾 正在保存报告...", 90)
 
         safe_topic = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", req.topic)[:20].strip(" .") or "调研"
@@ -725,34 +728,38 @@ def _run_research_worker(task_id: str, req: ResearchRequest):
             "## 参考文献\n\n"
             f"{ref_list}\n"
         )
-        atomic_write(os.path.join(REPORT_DIR, fname), report_md)
-        task["report"] = report_md
-        task["report_file"] = fname
-        task["status"] = "done"
-        log("done", f"✅ 报告已生成并保存：{fname}", 100)
+        with paper_api._TASK_LOCK:
+            if cancelled() or task.get("status") in _TERMINAL_TASK_STATUS:
+                finish_cancelled()
+                return
+            atomic_write(os.path.join(REPORT_DIR, fname), report_md)
+            paper_api._finish(task, "done", progress=100,
+                              message=f"✅ 报告已生成并保存：{fname}",
+                              report=report_md, report_file=fname)
     except Exception as e:
         if cancelled():
             finish_cancelled()
             return
         logger.exception("研究任务失败")
-        task["status"] = "error"
-        task["error"] = str(e)
-        log("error", f"❌ 调研失败：{e}", 100)
+        paper_api._fail(task, e, cancel_wins=True)
+
+
+def _register_research(task_id: str) -> dict:
+    with paper_api._TASK_LOCK:
+        task = paper_api.PAPER_TASKS[task_id]
+        task.setdefault("references", [])
+        task.setdefault("report_file", None)
+        RESEARCH_TASKS[task_id] = task
+        return task
+
+
+def _queued_research(task_id: str, paper_id: str, req: ResearchRequest):
+    _register_research(task_id)
+    _run_research_worker(task_id, req)
 
 
 def _research_snapshot(task: dict) -> dict:
-    return {
-        "status": task["status"],
-        "stage": task["stage"],
-        "progress": task.get("progress", 0),
-        "logs": task["logs"],
-        "references": task.get("references", []),
-        "report": task.get("report"),
-        "report_file": task.get("report_file"),
-        "error": task.get("error"),
-        "created_at": task["created_at"],
-        "updated_at": task.get("updated_at", ""),
-    }
+    return paper_api._task_view(task, ("references", "report", "report_file"))
 
 
 @app.post("/api/research")
@@ -762,23 +769,17 @@ def api_start_research(req: ResearchRequest, request: Request):
     # 普通用户不能指定其他模型：忽略请求里的 provider/model，只用管理员设定的模型
     if not _is_admin_request(request):
         req = req.model_copy(update={"provider": None, "model": None})
-    task_id = uuid.uuid4().hex[:12]
+    prefs = load_prefs()
+    req = req.model_copy(update={
+        "provider": req.provider or prefs.get("provider") or settings.DEFAULT_LLM_PROVIDER,
+        "model": req.model or prefs.get("model") or "",
+    })
     _prune_research_tasks()
-    RESEARCH_TASKS[task_id] = {
-        "id": task_id,
-        "status": "running",
-        "stage": "starting",
-        "progress": 0,
-        "cancel_requested": False,
-        "logs": [],
-        "references": [],
-        "report": None,
-        "report_file": None,
-        "error": None,
-        "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "updated_at": "",
-    }
-    threading.Thread(target=_run_research_worker, args=(task_id, req), daemon=True).start()
+    task_id = paper_api._launch(
+        "research", "", "", _queued_research, req, quota_amount=1,
+        quota_unlimited=_is_admin_request(request),
+    )
+    _register_research(task_id)
     return {"task_id": task_id}
 
 
@@ -789,11 +790,7 @@ def api_cancel_research(task_id: str):
         raise HTTPException(404, "任务不存在")
     if task.get("status") in _TERMINAL_TASK_STATUS:
         return _research_snapshot(task)
-    task["cancel_requested"] = True
-    task["status"] = "cancelled"
-    task["stage"] = "cancelled"
-    task["logs"].append("⏹ 已取消调研")
-    task["updated_at"] = datetime.datetime.now().strftime("%H:%M:%S")
+    paper_api._cancel_task(task, immediate=True, message="⏹ 已取消调研")
     return _research_snapshot(task)
 
 
@@ -840,20 +837,57 @@ def api_research_followup(req: FollowupRequest):
         },
     ]
 
-    def gen():
+    outbox = queue.Queue(maxsize=64)
+    task_id = paper_api._launch(
+        "research_followup", "", "", _followup_worker,
+        llm, messages, outbox, quota_amount=1, quota_unlimited=auth.is_admin(),
+    )
+    task = paper_api.PAPER_TASKS[task_id]
+
+    async def gen():
         try:
-            for chunk in llm.stream_chat(messages, temperature=0.6, max_tokens=1024):
-                if chunk:
-                    yield _sse({"type": "delta", "text": chunk})
-            yield _sse({"type": "done"})
-        except Exception as e:
-            yield _sse({"type": "error", "text": f"追问失败: {e}"})
+            while True:
+                try:
+                    frame = await asyncio.to_thread(outbox.get, True, 0.25)
+                except queue.Empty:
+                    if task.get("status") in _TERMINAL_TASK_STATUS:
+                        return
+                    continue
+                yield frame
+        finally:
+            paper_api._cancel_task(task, immediate=True, message="追问连接已关闭")
 
     return StreamingResponse(
         gen(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _followup_worker(task_id: str, paper_id: str, llm, messages: list[dict], outbox):
+    task = paper_api.PAPER_TASKS[task_id]
+
+    def send(payload):
+        while not task.get("cancel_requested"):
+            try:
+                outbox.put(_sse(payload), timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    stream = LLMGateway(llm).stream("research_followup", messages, temperature=0.6)
+    try:
+        for chunk in stream:
+            if not send({"type": "delta", "text": chunk}):
+                return
+        if paper_api._finish(task, "done", cancel_wins=True):
+            send({"type": "done"})
+    except Exception as exc:
+        paper_api._fail(task, exc, cancel_wins=True)
+        send({"type": "error", "text": f"追问失败: {exc}"})
+    finally:
+        stream.close()
 
 
 # ---------------------------------------------------------------------------

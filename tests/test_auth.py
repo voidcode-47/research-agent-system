@@ -14,6 +14,8 @@ from utils import prefs as prefs_module
 
 @pytest.fixture
 def admin_env(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "PAPER_DATA_DIR", str(tmp_path / "papers"))
+    monkeypatch.setattr(quota, "QUOTA_PATH", str(tmp_path / "quota.json"))
     monkeypatch.setattr(auth, "ADMIN_PATH", str(tmp_path / "admin.json"))
     monkeypatch.setattr(auth, "CREDENTIALS_PATH", str(tmp_path / "admin_credentials.txt"))
     monkeypatch.setattr(settings, "ADMIN_USERNAME", "admin")
@@ -81,6 +83,7 @@ def test_ordinary_user_cannot_change_models(admin_env, browser):
 
 
 def test_ordinary_user_research_cannot_override_model(admin_env, browser, monkeypatch):
+    monkeypatch.setattr(server, "load_prefs", lambda: {"provider": "ollama", "model": "chosen-model"})
     captured = {}
     done = threading.Event()
 
@@ -95,8 +98,8 @@ def test_ordinary_user_research_cannot_override_model(admin_env, browser, monkey
     })
     assert r.status_code == 200
     assert done.wait(3)
-    assert captured["provider"] is None
-    assert captured["model"] is None
+    assert captured["provider"] == "ollama"
+    assert captured["model"] == "chosen-model"
 
 
 def test_admin_research_keeps_model_override(admin_env, browser, monkeypatch):

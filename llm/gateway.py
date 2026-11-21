@@ -107,6 +107,7 @@ class LLMGateway:
         temperature: float = 0.3,
         expect_json: bool = True,
         validator=None,
+        timeout: float | None = None,
     ):
         task = LLM_TASKS.get(task_type)
         if not task:
@@ -127,19 +128,17 @@ class LLMGateway:
             started = time.monotonic()
             resp = None
             try:
-                resp = self.llm.chat(msgs, temperature=temperature, max_tokens=limit)
+                options = {"timeout": timeout} if timeout is not None else {}
+                resp = self.llm.chat(msgs, temperature=temperature, max_tokens=limit, **options)
                 content = getattr(resp, "content", "") or ""
-                if not _provider_error(content):
-                    completion_received = True
+                if _provider_error(content):
+                    msg = content.strip()[:200]
+                    if re.search(r"401|403|authentication|api[\s_-]*key", msg, re.I):
+                        msg += "。请在侧边栏「添加模型」并填写有效 API Key 后重试。"
+                    raise _ModelCallFailed(msg)
+                completion_received = completion_received or bool(content.strip())
                 data = extract_json(content) if expect_json else content
                 if expect_json and data is None:
-                    if _provider_error(content):
-                        self._audit(task_type, paper_id, resp, started, False,
-                                    content.strip()[:120])
-                        msg = content.strip()[:200]
-                        if re.search(r"401|403|authentication|api[\s_-]*key", msg, re.I):
-                            msg += "。请在侧边栏「添加模型」并填写有效 API Key 后重试。"
-                        raise _ModelCallFailed(msg)
                     raise ValueError("模型输出不是合法 JSON")
                 if validator is not None and not validator(data):
                     if _unbalanced(content):
@@ -158,13 +157,43 @@ class LLMGateway:
                     msgs = list(messages) + [{
                         "role": "user",
                         "content": (
-                            "你上一次的输出不符合要求，原因：" + str(e)[:120] +
-                            "。请严格只输出一个合法 JSON 对象，字段按要求返回。"
+                            "你上一次的输出不符合要求，原因：" + str(e)[:120]
+                            + ("。请严格只输出一个合法 JSON 对象，字段按要求返回。"
+                               if expect_json else "。请重新输出完整正文。")
                         ),
                     }]
         if charged and not completion_received:
             self._refund(charge)
         raise RuntimeError(f"模型任务 {task_type} 执行失败：{last_err}")
+
+    def stream(self, task_type: str, messages: list[dict], *,
+               temperature: float = 0.3, max_tokens: int | None = None):
+        """流式逻辑调用只扣一次；无输出失败退款，已有输出的失败保留计费。"""
+        task = LLM_TASKS.get(task_type)
+        if not task:
+            raise ValueError(f"不允许的 LLM 任务类型：{task_type}")
+        limit = min(max_tokens or task["max_tokens"], task["max_tokens"])
+        receipt = quota.charge(self.quota_key, unlimited=auth.is_admin())
+        received = False
+        length = 0
+        stream = None
+        try:
+            stream = self.llm.stream_chat(messages, temperature=temperature, max_tokens=limit)
+            for chunk in stream:
+                if not chunk:
+                    continue
+                received = True
+                length += len(chunk)
+                if length > limit * 16:
+                    raise RuntimeError("模型流式输出超过长度上限")
+                yield chunk
+            if not received:
+                raise RuntimeError("模型未返回任何内容")
+        finally:
+            if stream is not None and hasattr(stream, "close"):
+                stream.close()
+            if receipt is not None and not received:
+                self._refund(receipt)
 
     def _refund(self, charge: quota.Charge | None) -> None:
         try:
