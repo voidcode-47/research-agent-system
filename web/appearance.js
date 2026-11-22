@@ -53,7 +53,7 @@
       const rain = environment.particle === "drop";
       const star = environment.particle === "star";
       const depth = i % 3;
-      const duration = rain ? 18 + i * 7 % 10 : star ? 3 + i % 5 : 9 + i * 7 % 10;
+      const duration = rain ? 5.5 + (2 - depth) * 1.1 + i % 4 * .35 : star ? 3 + i % 5 : 9 + i * 7 % 10;
       // Negative delays distribute particles through the viewport on the first frame.
       const phase = -(i + .5) * duration / environment.count;
       const x = (7.21 + i * 37.73) % 100;

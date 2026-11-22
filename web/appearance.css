@@ -422,50 +422,54 @@ body { font-family: var(--font-ui); }
 }
 .weather-drop {
   --travel: calc(100dvh + 200px);
-  border-radius: 48% 52% 46% 54% / 62% 64% 36% 38%;
-  backdrop-filter: blur(1px) contrast(1.12) brightness(1.06);
+  border-radius: 43% 57% 49% 51% / 56% 51% 49% 44%;
+  backdrop-filter: blur(.35px) contrast(1.18) brightness(1.025);
   --weather-animation: glass-slide var(--fall) linear var(--phase) infinite;
 }
+.weather-drop:nth-child(3n) { border-radius: 54% 46% 42% 58% / 52% 45% 55% 48%; }
+.weather-drop:nth-child(3n + 1) { border-radius: 46% 54% 56% 44% / 60% 54% 46% 40%; }
 .weather-drop::before {
-  content: ""; position: absolute; left: 44%; bottom: calc(var(--size) * .6);
-  width: calc(var(--size) * .16); height: calc(var(--size) * 3.2);
-  border-radius: 50% 50% 35% 35%;
-  background: linear-gradient(180deg, transparent, #b5d5ec14 35%, #eaf7ff57 80%, #83b0d13d);
-  box-shadow: 1px 0 2px #417d9c14;
+  content: ""; position: absolute; left: 48%; bottom: calc(var(--size) * .7);
+  width: calc(var(--size) * .08); height: calc(var(--size) * 1.9);
+  border-radius: 50%;
+  background: linear-gradient(180deg, transparent, #ffffff0d 35%, #ffffff38 80%, #33424a14);
+  box-shadow: .5px 0 1px #33424a1a;
 }
 .weather-drop .weather-shape {
-  width: var(--size); height: calc(var(--size) * 1.4);
-  border: 1px solid; border-color: #ffffffcc #578fb080 #386e988c #d2edffc2;
+  width: var(--size); height: calc(var(--size) * 1.18);
+  border: .7px solid; border-color: #ffffffa3 #34434c38 #24343c80 #ffffff80;
   border-radius: inherit;
   background:
-    radial-gradient(ellipse at 28% 20%, #ffffffed, #ffffff80 7%, transparent 26%),
-    radial-gradient(ellipse at 72% 77%, #3b6d9452, transparent 40%),
-    linear-gradient(135deg, #e5f4ff66, #ffffff30 36%, #719fc23d 66%, #ffffff80);
-  box-shadow: inset -3px -5px 8px #41789b59, inset 3px 3px 6px #ffffffb3, 1px 3px 8px #20507833;
+    radial-gradient(ellipse at 31% 12%, #ffffffa3, transparent 18%),
+    radial-gradient(ellipse at 64% 91%, #25353e24, transparent 48%),
+    linear-gradient(155deg, #ffffff14, transparent 38%, #ffffff05 72%, #ffffff24);
+  box-shadow: inset 1px 1px 1px #ffffff99, inset -1px -2px 2px #23374466, 0 1px 2px #2134421f;
   transform-origin: center bottom;
   --weather-animation: droplet-stretch var(--fall) ease-in-out var(--phase) infinite;
 }
 .weather-drop .weather-shape::before {
-  content: ""; position: absolute; left: 17%; top: 14%; width: 15%; height: 32%;
-  border-radius: 50%; transform: rotate(20deg);
-  background: linear-gradient(#fffffff2, #ffffff40);
+  content: ""; position: absolute; left: 12%; top: 9%; width: 45%; height: 37%;
+  border-radius: 60% 50% 0 0; transform: rotate(-24deg);
+  border-top: 1.3px solid #ffffffd9;
+  border-left: .8px solid #ffffff80;
 }
 .weather-drop .weather-shape::after {
-  content: ""; position: absolute; left: 22%; bottom: 10%; width: 56%; height: 12%;
-  border-radius: 50%;
-  background: radial-gradient(ellipse, #ffffffb3, transparent 72%);
+  content: ""; position: absolute; right: 19%; bottom: 11%; width: 20%; height: 5%;
+  border-radius: 50%; transform: rotate(-18deg);
+  background: #ffffff99;
 }
 @keyframes glass-slide {
   0% { transform: translate3d(0, -30px, 0); opacity: 0; }
-  6%, 92% { opacity: var(--alpha, .86); }
-  18%, 26% { transform: translate3d(calc(var(--drift) * .16), calc(var(--travel) * .12), 0); }
-  50%, 58% { transform: translate3d(calc(var(--drift) * .52), calc(var(--travel) * .52), 0); }
-  86% { transform: translate3d(calc(var(--drift) * .84), calc(var(--travel) * .84), 0); }
+  5%, 94% { opacity: var(--alpha, .86); }
+  20% { transform: translate3d(calc(var(--drift) * .18), calc(var(--travel) * .14), 0); }
+  50% { transform: translate3d(calc(var(--drift) * .46), calc(var(--travel) * .44), 0); }
+  78% { transform: translate3d(calc(var(--drift) * .73), calc(var(--travel) * .74), 0); }
   100% { transform: translate3d(var(--drift), var(--travel), 0); opacity: 0; }
 }
 @keyframes droplet-stretch {
-  0%, 18%, 26%, 50%, 58%, 100% { transform: rotate(-2deg) scale(1); }
-  40%, 78% { transform: rotate(2deg) scale(.92, 1.12); }
+  0%, 20%, 100% { transform: scale(1); }
+  50% { transform: scale(.98, 1.04); }
+  78% { transform: scale(.96, 1.08); }
 }
 :root[data-motion="off"] .theme-atmosphere { display: none; }
 
