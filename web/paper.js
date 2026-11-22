@@ -335,6 +335,7 @@ async function initPaperPage() {
   paperState.inited = true;
 
   $("btn-paper-upload").addEventListener("click", () => pwUpload().catch(pwError));
+  $("paper-file").addEventListener("change", pwUpdateFileChoice);
   $("paper-select").addEventListener("change", (e) => {
     if (e.target.value) pwLoadPaper(e.target.value).catch(pwError);
     else pwResetPaper();
@@ -854,6 +855,25 @@ function pwEmphasizeExport(preferred) {
 }
 
 // ---------- 上传 ----------
+function pwUpdateFileChoice() {
+  const input = $("paper-file");
+  const f = input && input.files && input.files[0];
+  const nameEl = $("paper-file-name");
+  const zone = $("paper-upload-zone");
+  if (!nameEl || !zone) return;
+  if (f) {
+    const kb = (f.size || 0) / 1024;
+    const size = kb >= 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(kb))} KB`;
+    nameEl.textContent = `${f.name} · ${size} · 点击可重新选择`;
+    nameEl.classList.remove("hidden");
+    zone.classList.add("has-file");
+  } else {
+    nameEl.textContent = "";
+    nameEl.classList.add("hidden");
+    zone.classList.remove("has-file");
+  }
+}
+
 async function pwUpload() {
   const f = $("paper-file").files[0];
   if (!f) { pwAlert("请先选择 PDF 或 Word 文件", "warn"); return; }
@@ -876,6 +896,7 @@ async function pwUpload() {
     const report = await pwPollUpload(created.task_id);
     pwTaskProgress("paper-upload", 100, "解析完成");
     $("paper-file").value = "";
+    pwUpdateFileChoice();
     await pwLoadList();
     await pwLoadPaper(report.paper_id);
     $("paper-upload-result").innerHTML =

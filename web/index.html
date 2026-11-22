@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<link rel="stylesheet" href="/style.css?v=0dc78ea11f73">
+<link rel="stylesheet" href="/style.css?v=ccbf5d8b297d">
 </head>
 <body>
 <div class="layout">
@@ -12,13 +12,36 @@
   <aside class="sidebar">
     <div class="brand">
       <span class="brand-mark">论</span>
-      <span class="brand-text">论文工作台</span>
+      <div>
+        <span class="brand-text">论文工作台</span>
+        <p class="brand-caption">专注研究 · 精进表达</p>
+      </div>
     </div>
 
+    <div class="nav-label">工作空间</div>
     <nav id="nav">
-      <button class="nav-item active" data-page="paper">论文工作台</button>
-      <button class="nav-item" data-page="research">参考文献调研</button>
-      <button class="nav-item" data-page="settings">设置</button>
+      <button class="nav-item active" data-page="paper">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/>
+          <path d="M14 3v6h6M8 13h8M8 17h5"/>
+        </svg>
+        <span>论文工作台</span>
+      </button>
+      <button class="nav-item" data-page="research">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="10.5" cy="10.5" r="6.5"/>
+          <path d="m15.5 15.5 5 5M8 8.5h5M8 12h3"/>
+        </svg>
+        <span>参考文献调研</span>
+      </button>
+      <button class="nav-item" data-page="settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 7h3m4 0h9M4 17h9m4 0h3"/>
+          <circle cx="9" cy="7" r="2"/>
+          <circle cx="15" cy="17" r="2"/>
+        </svg>
+        <span>设置</span>
+      </button>
     </nav>
 
     <div class="sidebar-auth">
@@ -39,42 +62,63 @@
     <section id="view-paper" class="view active">
       <div class="view-header">
         <div class="view-title">
+          <div class="eyebrow">PAPER STUDIO</div>
           <h1>论文诊断与优化</h1>
-          <p class="view-sub">上传 PDF / Word → 需求确认 → 四维诊断 → 相似论文 → 段落改写 → 导出 Word / PDF。只做诊断、建议与局部改写，不代写整篇论文。</p>
+          <p class="view-sub">从诊断到改写，让每一次修改都有依据。只做诊断、建议与局部改写，不代写整篇论文。</p>
         </div>
-        <div class="toolbar">
+        <div class="library-toolbar">
           <input type="search" id="paper-search" class="input paper-search-input" placeholder="搜索标题或文件名" autocomplete="off" aria-label="搜索论文">
           <select id="paper-select" class="input" title="历史论文">
             <option value="">选择论文...</option>
           </select>
           <button id="btn-paper-more" class="btn btn-ghost hidden" title="加载更多论文">更多</button>
           <span id="paper-list-count" class="paper-list-count"></span>
-          <button id="btn-paper-refresh" class="btn btn-ghost">刷新</button>
-          <button id="btn-paper-new" class="btn btn-ghost">新建</button>
-          <button id="btn-paper-restore" class="btn btn-ghost">恢复备份</button>
-          <input type="file" id="paper-restore-file" accept=".zip,application/zip" hidden>
-          <button id="btn-paper-delete" class="btn btn-ghost">删除</button>
+          <button id="btn-paper-new" class="btn btn-primary">新建论文</button>
+          <details class="toolbar-more">
+            <summary class="btn btn-ghost">更多操作</summary>
+            <div class="toolbar-menu">
+              <button id="btn-paper-refresh" class="btn btn-ghost toolbar-menu-item">刷新列表</button>
+              <button id="btn-paper-restore" class="btn btn-ghost toolbar-menu-item">恢复备份</button>
+              <input type="file" id="paper-restore-file" accept=".zip,application/zip" hidden>
+              <button id="btn-paper-delete" class="btn btn-ghost toolbar-menu-item toolbar-menu-danger">删除论文</button>
+            </div>
+          </details>
         </div>
       </div>
 
       <div class="paper-steps" id="paper-steps">
-        <button class="paper-step active" data-step="1"><b>1</b><span>上传</span></button>
-        <button class="paper-step" data-step="2"><b>2</b><span>需求确认</span></button>
-        <button class="paper-step" data-step="3"><b>3</b><span>四维诊断</span></button>
-        <button class="paper-step" data-step="4"><b>4</b><span>相似论文</span></button>
-        <button class="paper-step" data-step="5"><b>5</b><span>段落改写</span></button>
+        <button class="paper-step active" data-step="1"><b>01</b><span>上传论文</span></button>
+        <button class="paper-step" data-step="2"><b>02</b><span>需求确认</span></button>
+        <button class="paper-step" data-step="3"><b>03</b><span>四维诊断</span></button>
+        <button class="paper-step" data-step="4"><b>04</b><span>相似论文</span></button>
+        <button class="paper-step" data-step="5"><b>05</b><span>段落改写</span></button>
       </div>
 
-      <div id="paper-alert" class="paper-alert hidden"></div>
+      <div id="paper-alert" class="paper-alert hidden" role="status" aria-live="polite"></div>
 
       <!-- ① 上传 -->
       <div class="paper-step-panel active" id="paper-step-1">
-        <div class="card">
-          <div class="section-title">① 上传论文（PDF / Word）</div>
-          <p class="muted">支持 PDF 与 Word（.docx）文件（≤50MB；PDF ≤200 页）。扫描件需先 OCR 后再上传；Word 页码按字数估算；解析结果会持久化保存在本机 <code>data/papers/</code>。</p>
-          <div class="row">
+        <div class="card upload-card">
+          <div class="card-heading">
+            <div>
+              <div class="section-title">① 上传论文</div>
+              <p class="muted">支持 PDF 与 Word（.docx）文件（≤50MB；PDF ≤200 页）。扫描件需先 OCR 后再上传；Word 页码按字数估算；解析结果会持久化保存在本机 <code>data/papers/</code>。</p>
+            </div>
+            <span class="meta-tag">PDF / DOCX</span>
+          </div>
+          <div class="upload-zone" id="paper-upload-zone">
+            <svg class="upload-symbol" viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 16V4m0 0 4 4m-4-4-4 4"/>
+              <path d="M4 16v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+            </svg>
+            <div class="upload-title">选择要优化的论文</div>
+            <div class="muted">保留原文，修改由你确认。</div>
+            <div class="upload-file-name hidden" id="paper-file-name" role="status" aria-live="polite"></div>
             <input type="file" id="paper-file" class="input file-input" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">
+          </div>
+          <div class="upload-actions">
             <button id="btn-paper-upload" class="btn btn-primary">上传并解析</button>
+            <span class="muted">解析完成后，自动进入需求确认。</span>
           </div>
           <div class="paper-task-progress hidden" id="paper-upload-progress">
             <div class="diag-progress-head">
@@ -94,70 +138,90 @@
 
       <!-- ② 需求确认 -->
       <div class="paper-step-panel" id="paper-step-2">
-        <div class="card">
-          <div class="section-title">② 确认诊断需求</div>
-          <p class="muted">诊断必须基于确认后的需求。修改需求会将已有诊断标记为过期，需要重新诊断。</p>
-          <div class="paper-form-grid">
+        <div class="card requirements-card">
+          <div class="card-heading">
             <div>
-              <label class="lbl">论文类型 / 层次</label>
-              <select id="paper-level" class="input"></select>
+              <div class="section-title">② 确认诊断需求</div>
+              <p class="muted">诊断必须基于确认后的需求。修改需求会将已有诊断标记为过期，需要重新诊断。</p>
             </div>
-            <div>
-              <label class="lbl">格式模板</label>
-              <select id="paper-template" class="input"></select>
-            </div>
-            <div>
-              <label class="lbl">参考文献格式</label>
-              <select id="paper-refstyle" class="input"></select>
-            </div>
-            <div>
-              <label class="lbl">中文字体</label>
-              <input id="paper-font-cn" class="input" placeholder="宋体">
-            </div>
-            <div>
-              <label class="lbl">英文/数字字体</label>
-              <input id="paper-font-latin" class="input" placeholder="Times New Roman">
-            </div>
-            <div>
-              <label class="lbl">正文字号（磅）</label>
-              <input id="paper-font-size" class="input" type="number" step="0.5" min="8" max="24">
-            </div>
-            <div>
-              <label class="lbl">行距（倍）</label>
-              <input id="paper-line-spacing" class="input" type="number" step="0.1" min="1" max="3">
-            </div>
-            <div>
-              <label class="lbl">段前间距（磅）</label>
-              <input id="paper-space-before" class="input" type="number" step="0.5" min="0" max="72">
-            </div>
-            <div>
-              <label class="lbl">段后间距（磅）</label>
-              <input id="paper-space-after" class="input" type="number" step="0.5" min="0" max="72">
-            </div>
-            <div>
-              <label class="lbl">首行缩进（字符）</label>
-              <input id="paper-indent" class="input" type="number" step="0.5" min="0" max="10">
-            </div>
-            <div>
-              <label class="lbl">章节分页</label>
-              <label class="chk"><input id="paper-page-break" type="checkbox"> 每章另起一页</label>
-            </div>
-            <div>
-              <label class="lbl">去 AI 味强度</label>
-              <select id="paper-deai-strength" class="input"></select>
-            </div>
+            <span class="meta-tag">必需</span>
           </div>
-          <label class="lbl">去 AI 味时必须保留</label>
-          <div class="chk-group" id="paper-keep">
-            <label class="chk"><input type="checkbox" value="数据" checked> 数据与数字</label>
-            <label class="chk"><input type="checkbox" value="术语" checked> 专业术语</label>
-            <label class="chk"><input type="checkbox" value="引用" checked> 引用与出处</label>
+          <div class="requirements-layout">
+            <div class="requirements-main">
+              <fieldset class="form-section">
+                <legend>论文与引用</legend>
+                <div class="form-grid-2">
+                  <div>
+                    <label class="lbl">论文类型 / 层次</label>
+                    <select id="paper-level" class="input"></select>
+                  </div>
+                  <div>
+                    <label class="lbl">参考文献格式</label>
+                    <select id="paper-refstyle" class="input"></select>
+                  </div>
+                </div>
+              </fieldset>
+              <fieldset class="form-section">
+                <legend>正文排版</legend>
+                <div class="form-grid-2">
+                  <div>
+                    <label class="lbl">格式模板</label>
+                    <select id="paper-template" class="input"></select>
+                  </div>
+                  <div>
+                    <label class="lbl">章节分页</label>
+                    <label class="chk"><input id="paper-page-break" type="checkbox"> 每章另起一页</label>
+                  </div>
+                  <div>
+                    <label class="lbl">中文字体</label>
+                    <input id="paper-font-cn" class="input" placeholder="宋体">
+                  </div>
+                  <div>
+                    <label class="lbl">英文/数字字体</label>
+                    <input id="paper-font-latin" class="input" placeholder="Times New Roman">
+                  </div>
+                  <div>
+                    <label class="lbl">正文字号（磅）</label>
+                    <input id="paper-font-size" class="input" type="number" step="0.5" min="8" max="24">
+                  </div>
+                  <div>
+                    <label class="lbl">行距（倍）</label>
+                    <input id="paper-line-spacing" class="input" type="number" step="0.1" min="1" max="3">
+                  </div>
+                  <div>
+                    <label class="lbl">段前间距（磅）</label>
+                    <input id="paper-space-before" class="input" type="number" step="0.5" min="0" max="72">
+                  </div>
+                  <div>
+                    <label class="lbl">段后间距（磅）</label>
+                    <input id="paper-space-after" class="input" type="number" step="0.5" min="0" max="72">
+                  </div>
+                  <div>
+                    <label class="lbl">首行缩进（字符）</label>
+                    <input id="paper-indent" class="input" type="number" step="0.5" min="0" max="10">
+                  </div>
+                </div>
+              </fieldset>
+            </div>
+            <aside class="requirements-aside">
+              <fieldset class="form-section">
+                <legend>改写偏好</legend>
+                <label class="lbl">去 AI 味强度</label>
+                <select id="paper-deai-strength" class="input"></select>
+                <label class="lbl">去 AI 味时必须保留</label>
+                <div class="chk-group" id="paper-keep">
+                  <label class="chk"><input type="checkbox" value="数据" checked> 数据与数字</label>
+                  <label class="chk"><input type="checkbox" value="术语" checked> 专业术语</label>
+                  <label class="chk"><input type="checkbox" value="引用" checked> 引用与出处</label>
+                </div>
+                <label class="lbl">禁用表达（可选，用顿号或逗号分隔）</label>
+                <input id="paper-banned" class="input" placeholder="例如：综上所述、赋能、抓手">
+                <label class="lbl">补充说明（可选）</label>
+                <textarea id="paper-notes" class="input" rows="3" placeholder="例如：学校要求正文 1.5 倍行距、标题层级最多三级"></textarea>
+              </fieldset>
+            </aside>
           </div>
-          <label class="lbl">禁用表达（可选，用顿号或逗号分隔）</label>
-          <input id="paper-banned" class="input" placeholder="例如：综上所述、赋能、抓手">
-          <label class="lbl">补充说明（可选）</label>
-          <textarea id="paper-notes" class="input" rows="2" placeholder="例如：学校要求正文 1.5 倍行距、标题层级最多三级"></textarea>
-          <div class="topic-actions">
+          <div class="form-footer">
             <button id="btn-paper-confirm" class="btn btn-primary">确认需求</button>
             <span id="paper-req-status" class="hint-line"></span>
           </div>
@@ -228,20 +292,12 @@
       <!-- ⑤ 段落改写 -->
       <div class="paper-step-panel" id="paper-step-5">
         <div class="paper-rewrite-layout">
-          <div class="card">
+          <div class="card paragraph-card">
             <div class="section-title">段落选择</div>
             <div class="row">
               <select id="paper-section-filter" class="input">
                 <option value="">全部章节</option>
               </select>
-            </div>
-            <div class="row paper-export-row">
-              <button id="btn-paper-export" class="btn btn-ghost">导出 Word</button>
-              <button id="btn-paper-export-pdf" class="btn btn-ghost">导出 PDF</button>
-              <button id="btn-paper-export-summary" class="btn btn-ghost">导出修改说明</button>
-              <button id="btn-paper-export-tracked" class="btn btn-ghost">导出 Word（修订）</button>
-              <button id="btn-paper-backup" class="btn btn-ghost">备份数据</button>
-              <button id="btn-paper-cleanup" class="btn btn-ghost">整理旧版本</button>
             </div>
             <div class="paper-batch-bar">
               <button id="btn-paper-batch" class="btn btn-primary" disabled>批量改写选中（0）</button>
@@ -263,8 +319,29 @@
             <div id="paper-batch-results" class="paper-batch-results"></div>
             <div id="paper-paragraph-list" class="paper-para-list"></div>
           </div>
-          <div class="card">
-            <div class="section-title">段落改写（逐段确认）</div>
+          <div class="card rewrite-editor">
+            <div class="rewrite-toolbar">
+              <div>
+                <div class="section-title">段落改写</div>
+                <div class="muted">先生成，再逐处确认。</div>
+              </div>
+              <div class="rewrite-toolbar-side">
+                <span class="paper-version" id="paper-version"></span>
+                <div class="paper-export-row">
+                  <button id="btn-paper-export" class="btn btn-ghost">导出 Word</button>
+                  <button id="btn-paper-export-pdf" class="btn btn-ghost">导出 PDF</button>
+                  <details class="toolbar-more">
+                    <summary class="btn btn-ghost">导出与备份</summary>
+                    <div class="toolbar-menu">
+                      <button id="btn-paper-export-summary" class="btn btn-ghost toolbar-menu-item">导出修改说明</button>
+                      <button id="btn-paper-export-tracked" class="btn btn-ghost toolbar-menu-item">导出 Word（修订）</button>
+                      <button id="btn-paper-backup" class="btn btn-ghost toolbar-menu-item">备份数据</button>
+                      <button id="btn-paper-cleanup" class="btn btn-ghost toolbar-menu-item">整理旧版本</button>
+                    </div>
+                  </details>
+                </div>
+              </div>
+            </div>
             <div class="paper-guide">
               <div class="paper-guide-head">
                 <div>
@@ -290,16 +367,18 @@
                 <input type="checkbox" id="paper-guide-use" checked> 改写时应用全局方针
               </label>
             </div>
+            <div class="editor-label">原文</div>
             <div class="paper-original" id="paper-original">在左侧选择一个正文段落。</div>
-            <div class="paper-form-grid">
+            <div class="rewrite-controls">
               <div>
                 <label class="lbl">改写模式</label>
                 <select id="paper-mode" class="input"></select>
               </div>
-              <div class="paper-version" id="paper-version"></div>
+              <div>
+                <label class="lbl">改写要求（可选）</label>
+                <input id="paper-instruction" class="input" placeholder="例如：压缩到 200 字以内，保留原有数据">
+              </div>
             </div>
-            <label class="lbl">改写要求（可选）</label>
-            <input id="paper-instruction" class="input" placeholder="例如：压缩到 200 字以内，保留原有数据">
             <div class="topic-actions">
               <button id="btn-paper-rewrite" class="btn btn-primary">生成改写</button>
               <button id="btn-paper-rewrite-cancel" class="btn btn-ghost hidden">取消改写</button>
@@ -323,6 +402,7 @@
                 <button id="btn-diff-revert-all" class="btn btn-ghost">全部还原</button>
               </div>
             </div>
+            <div class="editor-label diff-label">改写对比</div>
             <div id="paper-diff" class="paper-diff"></div>
             <div class="hint-line" id="paper-diff-hint"></div>
           </div>
@@ -349,36 +429,44 @@
     <section id="view-research" class="view">
       <div class="view-header">
         <div class="view-title">
+          <div class="eyebrow">REFERENCE DESK</div>
           <h1>参考文献调研</h1>
           <p class="view-sub">输入论文方向 → 自动检索 Crossref / OpenAlex 文献 → 生成综合调研报告。文献仅作调研线索，请自行核对原文。</p>
         </div>
       </div>
 
-      <div class="card topic-card">
-        <label class="lbl">论文方向 / 研究主题</label>
-        <textarea id="research-topic" class="input topic-input" rows="3"
-          placeholder="例如：人脸识别 / 大语言模型推理优化 / 工业质检中的缺陷检测"></textarea>
-        <div class="topic-actions">
-          <details class="adv">
-            <summary>检索设置</summary>
-            <div class="adv-grid">
-              <div>
-                <label class="lbl">参考文献条数 <span id="v-results"></span></label>
-                <input type="range" id="results" min="5" max="10" value="8">
+      <div class="research-layout">
+        <div class="card research-compose">
+          <div class="section-title">从研究问题出发</div>
+          <label class="lbl">论文方向 / 研究主题</label>
+          <textarea id="research-topic" class="input topic-input" rows="4"
+            placeholder="例如：人脸识别 / 大语言模型推理优化 / 工业质检中的缺陷检测"></textarea>
+          <div class="topic-actions">
+            <details class="adv">
+              <summary>检索设置</summary>
+              <div class="adv-grid">
+                <div>
+                  <label class="lbl">参考文献条数 <span id="v-results"></span></label>
+                  <input type="range" id="results" min="5" max="10" value="8">
+                </div>
+                <div>
+                  <label class="lbl">报告详细度</label>
+                  <select id="report-style" class="input">
+                    <option value="detailed">详细版</option>
+                    <option value="standard">标准版</option>
+                  </select>
+                </div>
               </div>
-              <div>
-                <label class="lbl">报告详细度</label>
-                <select id="report-style" class="input">
-                  <option value="detailed">详细版</option>
-                  <option value="standard">标准版</option>
-                </select>
-              </div>
+            </details>
+            <div class="topic-btns">
+              <button id="btn-research" class="btn btn-primary">开始调研</button>
+              <button id="btn-research-cancel" class="btn btn-danger hidden">停止调研</button>
             </div>
-          </details>
-          <div class="topic-btns">
-            <button id="btn-research" class="btn btn-primary">开始调研</button>
-            <button id="btn-research-cancel" class="btn btn-danger hidden">停止调研</button>
           </div>
+        </div>
+        <div class="card research-history">
+          <div class="section-title">历史报告</div>
+          <div id="report-list"><div class="muted">加载中...</div></div>
         </div>
       </div>
 
@@ -413,16 +501,17 @@
         </div>
         <div id="followup-answer" class="markdown"></div>
       </div>
-
-      <div class="card">
-        <div class="section-title">历史报告</div>
-        <div id="report-list"><div class="muted">加载中...</div></div>
-      </div>
     </section>
 
     <!-- ===== 设置页 ===== -->
     <section id="view-settings" class="view">
-      <div class="view-header"><h1>设置</h1></div>
+      <div class="view-header">
+        <div class="view-title">
+          <div class="eyebrow">PREFERENCES</div>
+          <h1>设置</h1>
+          <p class="view-sub">管理模型连接与本地工作环境。</p>
+        </div>
+      </div>
       <div class="settings-grid">
         <div class="card card-span">
           <div class="section-title">模型服务与协议</div>
@@ -594,6 +683,6 @@
 </dialog>
 
 <script src="/app.js?v=019cb48d7dc6"></script>
-<script src="/paper.js?v=6fe60b6c201d"></script>
+<script src="/paper.js?v=490fe9c0b22b"></script>
 </body>
 </html>

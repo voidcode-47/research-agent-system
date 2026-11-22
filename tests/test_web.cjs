@@ -376,6 +376,24 @@ function loadPage() {
   return { context, elements, run: (code) => vm.runInContext(code, context) };
 }
 
+test("choosing a file shows its name and clears after reset", async () => {
+  const { context, elements } = loadPage();
+  context.initPaperPage();
+  const input = elements.get("paper-file");
+  const nameEl = elements.get("paper-file-name");
+  const zone = elements.get("paper-upload-zone");
+  input.files = [{ name: "毕业论文.docx", size: 2048 }];
+  await input.dispatch("change");
+  assert.match(nameEl.textContent, /毕业论文\.docx · 2 KB/);
+  assert.equal(nameEl.classList.contains("hidden"), false);
+  assert.equal(zone.classList.contains("has-file"), true);
+  input.files = [];
+  await input.dispatch("change");
+  assert.equal(nameEl.textContent, "");
+  assert.equal(nameEl.classList.contains("hidden"), true);
+  assert.equal(zone.classList.contains("has-file"), false);
+});
+
 test("progress clamps percentages and resets when hidden", () => {
   const { context, elements } = loadPage();
   for (const [input, expected] of [[-5, 0], [50.6, 51], [110, 100], [NaN, 0]]) {
