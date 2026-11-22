@@ -97,6 +97,7 @@ function pwRewriteLimit() {
 function pwSetStep(n, force) {
   if (!force && n > paperState.maxStep) return;
   paperState.step = n;
+  $("view-paper").setAttribute("data-step", String(n));
   document.querySelectorAll(".paper-step").forEach((b) => {
     const s = Number(b.dataset.step);
     b.disabled = s > paperState.maxStep;

@@ -43,6 +43,8 @@
 
 ### 设置
 
+- 「设置 → 工作台外观」提供纸白、月墨、雾蓝、鸢尾四套主题，侧栏色点可快速切换。主题同时改变配色、字体、圆角和界面层次，并在当前浏览器记住选择。
+- 页面包含持续循环的纸页、校准滑杆、诊断雷达、引用网络、改写笔迹与轨道动画。可在侧栏或外观设置中关闭；系统启用“减少动态效果”时自动静止，切换到后台标签页时自动暂停。
 - 全站使用同一个模型。管理员保存服务后，可在「设置 → 模型服务与协议」中选择服务和模型，再点「设为当前模型」。
 - 自定义服务支持 DeepSeek、智谱 GLM、通义千问预设，也可手动输入 Base URL，并选择 OpenAI 兼容、Anthropic Messages 或 Gemini 协议；还支持本地 Ollama 和 LM Studio。
 - API Key 只写入本地 `.env`，不回传前端、不进入仓库。
@@ -136,7 +138,7 @@ data/                  本地数据（论文、报告、偏好；已 gitignore�
 
 ```bash
 .venv\Scripts\python.exe -m pytest -q
-node --test tests/test_web.cjs
+node --test tests/test_web.cjs tests/test_appearance.cjs
 node --check web/app.js
 node --check web/paper.js
 .venv\Scripts\python.exe scripts\build_frontend.py

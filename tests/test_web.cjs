@@ -288,7 +288,7 @@ function loadPage() {
   const elements = new Map();
   function makeElement() {
     return {
-      value: "", textContent: "", style: {}, disabled: false, children: [], listeners: new Map(),
+      value: "", textContent: "", style: {}, disabled: false, children: [], listeners: new Map(), attributes: new Map(),
       _html: "",
       set innerHTML(value) {
         this._html = value;
@@ -320,7 +320,7 @@ function loadPage() {
       },
       focus() {},
       blur() {},
-      setAttribute() {},
+      setAttribute(name, value) { this.attributes.set(name, value); },
       scrollIntoView() {},
       showModal() { this.open = true; },
       close() { this.open = false; this.dispatch("close"); },
@@ -358,6 +358,7 @@ function loadPage() {
       },
       createElement() { return makeElement(); },
       querySelectorAll() { return []; },
+      addEventListener() {},
     },
     window: { addEventListener() {} },
     fetch: () => new Promise(() => {}),
@@ -375,6 +376,19 @@ function loadPage() {
   }
   return { context, elements, run: (code) => vm.runInContext(code, context) };
 }
+
+test("paper illustration follows the active step and ignores unavailable steps", () => {
+  const { context, elements } = loadPage();
+  const page = elements.get("view-paper");
+  context.pwSetStep(1, true);
+  assert.equal(page.attributes.get("data-step"), "1");
+  context.pwSetStep(2, true);
+  assert.equal(page.attributes.get("data-step"), "2");
+  context.pwSetStep(5);
+  assert.equal(page.attributes.get("data-step"), "2");
+  context.pwSetStep(1, true);
+  assert.equal(page.attributes.get("data-step"), "1");
+});
 
 test("choosing a file shows its name and clears after reset", async () => {
   const { context, elements } = loadPage();

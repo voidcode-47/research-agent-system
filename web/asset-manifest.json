@@ -1,8 +1,10 @@
 {
-  "version": "9ebea07278d9",
+  "version": "1a024e307732",
   "files": {
+    "appearance.js": "0198a342e572",
     "style.css": "ccbf5d8b297d",
+    "appearance.css": "68ffca1f1a23",
     "app.js": "019cb48d7dc6",
-    "paper.js": "490fe9c0b22b"
+    "paper.js": "12e60cbfc29e"
   }
 }

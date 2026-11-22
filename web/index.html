@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="paper" data-motion="on">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
+<script src="/appearance.js?v=0198a342e572"></script>
 <link rel="stylesheet" href="/style.css?v=ccbf5d8b297d">
+<link rel="stylesheet" href="/appearance.css?v=68ffca1f1a23">
 </head>
 <body>
 <div class="layout">
@@ -44,6 +46,19 @@
       </button>
     </nav>
 
+    <div class="sidebar-appearance">
+      <div class="appearance-head"><span>工作台外观</span><span>随心切换</span></div>
+      <div class="theme-dots" role="group" aria-label="快速切换主题">
+        <button type="button" class="theme-dot choice-paper" data-theme-choice="paper" aria-label="纸白主题" title="纸白 · 自然纸感" aria-pressed="true"></button>
+        <button type="button" class="theme-dot choice-ink" data-theme-choice="ink" aria-label="月墨主题" title="月墨 · 石墨与香槟" aria-pressed="false"></button>
+        <button type="button" class="theme-dot choice-mist" data-theme-choice="mist" aria-label="雾蓝主题" title="雾蓝 · 清晰而理性" aria-pressed="false"></button>
+        <button type="button" class="theme-dot choice-iris" data-theme-choice="iris" aria-label="鸢尾主题" title="鸢尾 · 柔和的灵感" aria-pressed="false"></button>
+      </div>
+      <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="界面动画" data-motion-toggle>
+        <span data-motion-label>动态开启</span><span class="toggle-track" aria-hidden="true"></span>
+      </button>
+    </div>
+
     <div class="sidebar-auth">
       <div id="auth-status" class="auth-status">普通用户 · 模型只读</div>
       <button id="btn-auth" class="btn btn-ghost btn-block-auth">管理员登录</button>
@@ -59,7 +74,7 @@
   <main class="content">
 
     <!-- ===== 论文工作台（五步向导） ===== -->
-    <section id="view-paper" class="view active">
+    <section id="view-paper" class="view active" data-step="1">
       <div class="view-header">
         <div class="view-title">
           <div class="eyebrow">PAPER STUDIO</div>
@@ -86,6 +101,49 @@
         </div>
       </div>
 
+      <div class="studio-banner paper-banner">
+        <div class="banner-copy">
+          <h2>
+            <span class="scene-copy" data-scene="1">让好论文，再进一步。</span>
+            <span class="scene-copy" data-scene="2">先明确标准，再开始诊断。</span>
+            <span class="scene-copy" data-scene="3">让每一处问题，都有依据。</span>
+            <span class="scene-copy" data-scene="4">在相近研究中，找到位置。</span>
+            <span class="scene-copy" data-scene="5">保留你的思考，打磨表达。</span>
+          </h2>
+          <p>从原文出发，诊断问题、核对文献，再逐段打磨表达。<br>让研究与写作，在一个安静的空间里继续。</p>
+          <span class="banner-note">原文保留，修改由你确认</span>
+        </div>
+        <div class="ambient-stage" aria-hidden="true">
+          <div class="paper-scene scene-folio">
+            <div class="folio-page back"><span class="folio-rule"></span><span class="folio-rule"></span></div>
+            <div class="folio-page middle"><span class="folio-rule short"></span><span class="folio-rule"></span></div>
+            <div class="folio-page"><span class="folio-heading">Aa</span><span class="folio-rule accent"></span><span class="folio-rule"></span><span class="folio-rule"></span><span class="folio-rule short"></span><span class="folio-seal"></span></div>
+            <i class="art-spark one"></i><i class="art-spark two"></i>
+          </div>
+          <div class="paper-scene scene-calibrate">
+            <div class="calibration-face"><div class="cal-bar"><i class="cal-knob"></i></div><div class="cal-bar"><i class="cal-knob"></i></div><div class="cal-bar"><i class="cal-knob"></i></div></div>
+            <i class="art-spark one"></i><i class="art-spark two"></i>
+          </div>
+          <div class="paper-scene scene-radar">
+            <div class="radar-disc"><div class="radar-cross"></div><div class="radar-sweep"></div><i class="radar-point one"></i><i class="radar-point two"></i><i class="radar-point three"></i></div>
+            <i class="art-spark one"></i><i class="art-spark two"></i>
+          </div>
+          <div class="paper-scene scene-links">
+            <svg class="network-art" viewBox="0 0 300 180" fill="none">
+              <path class="network-line" d="M50 61 102 28 151 89 221 40 260 110 151 89 202 153 91 139 50 61 151 89 91 139M102 28 221 40M91 139 202 153"/>
+              <path class="network-flow" d="M50 61 151 89 221 40M102 28 151 89 202 153M260 110 151 89 91 139"/>
+              <g class="network-node"><circle cx="50" cy="61" r="5"/><circle cx="102" cy="28" r="4"/><circle cx="221" cy="40" r="6"/><circle cx="260" cy="110" r="4"/><circle cx="202" cy="153" r="5"/><circle cx="91" cy="139" r="6"/></g>
+              <circle class="network-halo" cx="151" cy="89" r="32"/><circle class="network-core" cx="151" cy="89" r="22"/>
+              <path stroke="currentColor" stroke-width="1" d="M143 78h12l5 5v18h-17zM155 78v5h5M147 89h9M147 93h9M147 97h5"/>
+            </svg>
+          </div>
+          <div class="paper-scene scene-rewrite">
+            <div class="rewrite-page"><span class="rewrite-rule"></span><span class="rewrite-rule"></span><span class="rewrite-rule edited"></span><span class="rewrite-rule"></span><span class="rewrite-rule"></span></div>
+            <div class="rewrite-pen"></div><i class="art-spark one"></i>
+          </div>
+        </div>
+      </div>
+
       <div class="paper-steps" id="paper-steps">
         <button class="paper-step active" data-step="1"><b>01</b><span>上传论文</span></button>
         <button class="paper-step" data-step="2"><b>02</b><span>需求确认</span></button>
@@ -102,7 +160,7 @@
           <div class="card-heading">
             <div>
               <div class="section-title">① 上传论文</div>
-              <p class="muted">支持 PDF 与 Word（.docx）文件（≤50MB；PDF ≤200 页）。扫描件需先 OCR 后再上传；Word 页码按字数估算；解析结果会持久化保存在本机 <code>data/papers/</code>。</p>
+              <p class="muted">支持 PDF 与 Word（.docx），单个文件不超过 50MB，PDF 不超过 200 页。原文与修改记录保存在本机；扫描件需先进行文字识别。</p>
             </div>
             <span class="meta-tag">PDF / DOCX</span>
           </div>
@@ -435,6 +493,24 @@
         </div>
       </div>
 
+      <div class="studio-banner research-banner">
+        <div class="banner-copy">
+          <h2>把线索，连成知识的图景。</h2>
+          <p>从一个研究问题出发，发现相关文献、梳理研究脉络，<br>为下一步的思考找到可靠的起点。</p>
+          <span class="banner-note">Crossref 与 OpenAlex 学术检索</span>
+        </div>
+        <div class="ambient-stage" aria-hidden="true">
+          <svg class="network-art" viewBox="0 0 300 180" fill="none">
+            <path class="network-line" d="M38 95 83 34 154 84 225 26 269 85 224 145 154 84 83 148 38 95 154 84 269 85M83 34 225 26M83 148 224 145M83 34 83 148"/>
+            <path class="network-flow" d="M38 95 154 84 225 26M83 34 154 84 224 145M269 85 154 84 83 148"/>
+            <g class="network-node"><circle cx="38" cy="95" r="5"/><circle cx="83" cy="34" r="7"/><circle cx="225" cy="26" r="4"/><circle cx="269" cy="85" r="6"/><circle cx="224" cy="145" r="7"/><circle cx="83" cy="148" r="5"/></g>
+            <circle class="network-halo" cx="154" cy="84" r="36"/><circle class="network-core" cx="154" cy="84" r="25"/>
+            <path stroke="currentColor" stroke-width="1.2" stroke-linecap="round" d="M146 71h12l5 5v21h-17zM158 71v5h5M151 82h7M151 87h7M151 92h4"/>
+            <circle class="network-halo" cx="83" cy="34" r="13" style="animation-delay:-3s"/><circle class="network-halo" cx="224" cy="145" r="13" style="animation-delay:-6s"/>
+          </svg>
+        </div>
+      </div>
+
       <div class="research-layout">
         <div class="card research-compose">
           <div class="section-title">从研究问题出发</div>
@@ -512,6 +588,52 @@
           <p class="view-sub">管理模型连接与本地工作环境。</p>
         </div>
       </div>
+      <div class="studio-banner settings-banner">
+        <div class="banner-copy">
+          <h2>让工作环境，合乎心意。</h2>
+          <p>选择熟悉的色彩与节奏，连接适合你的模型。<br>把注意力留给研究，把其余交给工作台。</p>
+          <span class="banner-note">你的偏好，会被记住</span>
+        </div>
+        <div class="ambient-stage" aria-hidden="true">
+          <svg class="orbital-art" viewBox="0 0 300 180">
+            <circle class="orbit-core-halo" cx="150" cy="90" r="45"/>
+            <g class="orbit-ring"><ellipse cx="150" cy="90" rx="95" ry="36"/><circle class="orbit-satellite" cx="245" cy="90" r="5"/></g>
+            <g class="orbit-ring second"><ellipse cx="150" cy="90" rx="86" ry="38" transform="rotate(60 150 90)"/><circle class="orbit-satellite" cx="193" cy="164.5" r="4"/></g>
+            <g class="orbit-ring third"><ellipse cx="150" cy="90" rx="86" ry="38" transform="rotate(-60 150 90)"/><circle class="orbit-satellite" cx="193" cy="15.5" r="4"/></g>
+            <circle class="orbit-core" cx="150" cy="90" r="22"/>
+            <path d="m140 90 7 7 13-14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="card appearance-card">
+        <div class="card-heading">
+          <div><h2 class="section-title">工作台外观</h2><p class="muted">四种气质，一个专注的空间。切换后立即生效。</p></div>
+        </div>
+        <div class="theme-gallery" role="group" aria-label="选择工作台主题">
+          <button type="button" class="theme-choice choice-paper" data-theme-choice="paper" aria-pressed="true">
+            <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
+            <span class="choice-label">纸白 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">自然纸感，沉静的绿</span>
+          </button>
+          <button type="button" class="theme-choice choice-ink" data-theme-choice="ink" aria-pressed="false">
+            <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
+            <span class="choice-label">月墨 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">深邃石墨，香槟微光</span>
+          </button>
+          <button type="button" class="theme-choice choice-mist" data-theme-choice="mist" aria-pressed="false">
+            <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
+            <span class="choice-label">雾蓝 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">清透蓝灰，理性的秩序</span>
+          </button>
+          <button type="button" class="theme-choice choice-iris" data-theme-choice="iris" aria-pressed="false">
+            <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
+            <span class="choice-label">鸢尾 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">柔和紫雾，舒展的灵感</span>
+          </button>
+        </div>
+        <div class="appearance-footer">
+          <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="持续动画" data-motion-toggle><span class="toggle-track" aria-hidden="true"></span><span>页面持续动画</span><span data-motion-label>动态开启</span></button>
+          <p class="muted">纸页、引用网络与轨道缓慢循环。<span class="motion-system-note">系统已启用减少动态效果，动画保持静止。</span></p>
+        </div>
+      </div>
+
       <div class="settings-grid">
         <div class="card card-span">
           <div class="section-title">模型服务与协议</div>
@@ -683,6 +805,6 @@
 </dialog>
 
 <script src="/app.js?v=019cb48d7dc6"></script>
-<script src="/paper.js?v=490fe9c0b22b"></script>
+<script src="/paper.js?v=12e60cbfc29e"></script>
 </body>
 </html>
