@@ -140,7 +140,6 @@ function renderAuth() {
     status.className = "auth-status";
     btn.textContent = "管理员登录";
   }
-  $("btn-test").classList.toggle("hidden", !isAdmin());
   $("admin-password-card").classList.toggle("hidden", !isAdmin());
   $("active-model-form").classList.toggle("hidden", !isAdmin());
   $("provider-config-list").classList.toggle("hidden", !isAdmin());
@@ -242,41 +241,11 @@ function currentProviderModel() {
   return { provider, model };
 }
 
-function renderCurrentModel() {
-  const { provider, model } = currentProviderModel();
-  $("model-current").textContent = provider
-    ? modelDisplay(provider, model)
-    : "（未配置，点「去设置」）";
-}
-
 // 拉取提供商信息并重渲染所有依赖它的界面块
 async function loadProviders() {
   providersInfo = await api("/api/providers");
-  renderCurrentModel();
   updateSettingsTable();
   renderProviderConfig();
-}
-
-// ---------- 侧边栏事件 ----------
-$("btn-test").addEventListener("click", async () => {
-  const { provider, model } = currentProviderModel();
-  if (!provider) { setConn("未配置模型，请先在设置页填写 API Key", "err"); return; }
-  setConn("检测中...", "pending");
-  try {
-    // 用已保存的 Key / URL 测试全局模型
-    const r = await postJSON("/api/health-check", { provider, model: model || null });
-    if (r.model_ready) setConn(`✅ ${r.detail}`, "ok");
-    else if (r.reachable) setConn(`⚠️ ${r.detail}`, "warn");
-    else setConn(`❌ ${r.detail}`, "err");
-  } catch (e) { setConn(`❌ ${e.message}`, "err"); }
-});
-
-$("btn-goto-settings").addEventListener("click", () => switchPage("settings"));
-
-function setConn(text, kind) {
-  const el = $("conn-status");
-  el.textContent = text;
-  el.className = "conn " + (kind || "");
 }
 
 // ---------- 对话页 ----------

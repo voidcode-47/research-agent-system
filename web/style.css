@@ -79,22 +79,6 @@ body {
   font-weight: 500;
 }
 
-/* 模型配置 */
-.sidebar-model {
-  background: var(--surface-muted);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px 12px;
-  margin-bottom: 12px;
-}
-.sidebar-model-head { margin-bottom: 10px; }
-.sidebar-title { font-weight: 600; font-size: 12.5px; color: var(--text); }
-.model-current {
-  font-size: 13px; line-height: 1.5; color: var(--text);
-  padding: 8px 10px; border: 1px solid var(--border);
-  border-radius: var(--radius-sm); background: var(--surface);
-  word-break: break-all;
-}
 .lbl { display: block; font-size: 12px; color: var(--text-secondary); margin: 10px 0 5px; font-weight: 500; }
 .input {
   width: 100%; padding: 8px 12px; border: 1px solid var(--border);
@@ -124,14 +108,6 @@ select.input { cursor: pointer; }
 .btn-ghost:hover { background: var(--surface-muted); }
 .btn-block { width: 100%; margin-top: 12px; padding: 11px; font-size: 14px; height: 40px; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-row { display: flex; gap: 8px; margin-top: 12px; }
-.btn-row .btn { flex: 1; }
-
-#conn-status { margin-top: 10px; font-size: 12.5px; min-height: 18px; }
-.conn.ok { color: var(--success); }
-.conn.warn { color: #b45309; }
-.conn.err { color: var(--danger); }
-.conn.pending { color: var(--text-secondary); }
 
 .sidebar-footer { margin-top: auto; padding-top: 14px; font-size: 12px; color: var(--text-tertiary); line-height: 1.9; }
 .status-line { display: flex; align-items: center; gap: 6px; }

@@ -40,6 +40,9 @@ const paperState = {
   batchErrors: [],
   batchIds: new Set(),
   highRiskIds: [],
+  paragraphSuggestions: new Map(),
+  instructionPid: "",
+  instructionFromIssue: false,
   refs: null,
   refsPaperId: "",
   refsSeq: 0,
@@ -371,6 +374,11 @@ async function initPaperPage() {
   $("paper-section-filter").addEventListener("change", () => pwLoadParagraphs().catch(pwError));
   $("btn-paper-rewrite").addEventListener("click", () => pwRewrite().catch(pwError));
   $("btn-paper-rewrite-cancel").addEventListener("click", () => pwCancelRewrite().catch(pwError));
+  $("paper-instruction").addEventListener("input", () => {
+    // 用户改动过即视为手写要求，不再随段落切换自动替换
+    paperState.instructionFromIssue = false;
+    paperState.instructionPid = "";
+  });
   $("btn-paper-batch").addEventListener("click", () => pwBatchRewrite().catch(pwError));
   $("btn-paper-batch-adopt").addEventListener("click", () => pwAdoptBatch().catch(pwError));
   $("btn-paper-batch-clear").addEventListener("click", () => pwClearBatchSelection());
@@ -635,6 +643,10 @@ function pwResetPaper() {
   paperState.paper = null;
   paperState.selected = null;
   paperState.rewrite = null;
+  paperState.paragraphSuggestions = new Map();
+  paperState.instructionPid = "";
+  paperState.instructionFromIssue = false;
+  $("paper-instruction").value = "";
   paperState.guideline = null;
   paperState.guideTaskId = "";
   paperState.guidePaperId = "";
@@ -749,6 +761,10 @@ async function pwLoadPaper(paperId, opts = {}) {
   paperState.paper = p;
   paperState.selected = null;
   paperState.rewrite = null;
+  paperState.paragraphSuggestions = new Map();
+  paperState.instructionPid = "";
+  paperState.instructionFromIssue = false;
+  $("paper-instruction").value = "";
   paperState.guideline = null;
   paperState.tables = [];
   pwCloseTable();
@@ -1389,6 +1405,8 @@ function pwIssueRewriteMode(dimKey, it) {
 function pwRenderIssues(dims) {
   const box = $("paper-issues");
   const rows = [];
+  const suggestions = new Map();
+  const sevRank = { high: 0, medium: 1, low: 2 };
   PAPER_DIM_ORDER.forEach((key) => {
     const d = dims[key];
     if (!d) return;
@@ -1399,6 +1417,13 @@ function pwRenderIssues(dims) {
       const loc = it.paragraph_id || "";
       const instruction = it.suggestion || it.issue || "";
       const mode = pwIssueRewriteMode(key, it);
+      if (loc && instruction) {
+        const prev = suggestions.get(loc);
+        // 同一段落有多条问题时，取严重度最高的一条作为默认建议
+        if (!prev || sevRank[sev] < sevRank[prev.severity]) {
+          suggestions.set(loc, { instruction, mode, severity: sev });
+        }
+      }
       rows.push(
         `<div class="issue-item sev-${sev}" data-pid="${esc(loc)}" data-page="${esc(it.page || "")}" data-instruction="${esc(instruction)}" data-mode="${esc(mode)}">
            <div class="issue-head">
@@ -1414,13 +1439,13 @@ function pwRenderIssues(dims) {
       );
     });
   });
+  paperState.paragraphSuggestions = suggestions;
   box.innerHTML = rows.length
     ? `<div class="section-title">问题清单（点击条目自动填入建议并匹配改写模式；点「AI 改写并审核」先生成改写稿，逐处对比后再采纳）</div>${rows.join("")}`
     : '<p class="muted">暂无问题条目。</p>';
 }
 
-function pwApplyIssueRewrite(instruction, mode) {
-  $("paper-instruction").value = (instruction || "").trim();
+function pwSetRewriteMode(mode) {
   if (!mode) return;
   const sel = $("paper-mode");
   if (!pwHasOption(sel, mode)) {
@@ -1430,6 +1455,28 @@ function pwApplyIssueRewrite(instruction, mode) {
     sel.appendChild(opt);
   }
   sel.value = mode;
+}
+
+function pwFillInstructionForParagraph(pid) {
+  const sug = paperState.paragraphSuggestions.get(pid);
+  $("paper-instruction").value = sug ? sug.instruction : "";
+  if (sug) pwSetRewriteMode(sug.mode);
+  paperState.instructionPid = sug ? pid : "";
+  paperState.instructionFromIssue = !!sug;
+}
+
+function pwSyncInstructionWithParagraph(pid) {
+  // 只同步"由建议自动填入"的内容；用户手写的要求不因切换段落被覆盖
+  if (!paperState.instructionFromIssue || paperState.instructionPid === pid) return;
+  pwFillInstructionForParagraph(pid);
+}
+
+function pwApplyIssueRewrite(instruction, mode) {
+  $("paper-instruction").value = (instruction || "").trim();
+  paperState.instructionPid = (paperState.selected && paperState.selected.id) || "";
+  paperState.instructionFromIssue = true;
+  if (!mode) return;
+  pwSetRewriteMode(mode);
   pwAlert(`已自动填入该条建议，改写模式：${PAPER_MODE_LABELS[mode] || mode}`, "ok", 5);
 }
 
@@ -1890,6 +1937,7 @@ async function pwSelectParagraph(pid) {
   $("paper-rewrite-meta").textContent = `${p.id} · 第 ${p.page || "-"} 页 · ${(p.text || "").length} 字`;
   $("paper-rewrite-warning").classList.add("hidden");
   $("btn-paper-adopt").classList.add("hidden");
+  pwSyncInstructionWithParagraph(pid);
 }
 
 // ---------- 全局改写方针 ----------

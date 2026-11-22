@@ -73,7 +73,7 @@ from paper.rewrite import (
 )
 from paper.similar import SimilarCancelled, find_similar
 from utils import auth, quota
-from utils.guard import gate, is_jailbreak
+from utils.guard import gate, gate_rewrite_instruction, is_jailbreak
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -1455,7 +1455,7 @@ def api_generate_guideline(paper_id: str, body: GuidelineBody, request: Request)
     meta = _paper_or_404(paper_id)
     instruction = (body.instruction or "").strip()
     if instruction:
-        g = gate(instruction, True)
+        g = gate_rewrite_instruction(instruction)
         if not g["allowed"]:
             raise HTTPException(400, g["reply"])
     inputs = paper_inputs.capture(paper_id, _create_llm())
@@ -1556,7 +1556,7 @@ def api_rewrite(paper_id: str, body: RewriteBody, request: Request):
         raise HTTPException(400, f"未知改写模式：{body.mode}")
     _rewrite_target(paper_id, body.paragraph_id)
 
-    g = gate(body.instruction or "润色这段论文内容", True)
+    g = gate_rewrite_instruction(body.instruction or "润色这段论文内容")
     if not g["allowed"]:
         raise HTTPException(400, g["reply"])
 
@@ -1691,7 +1691,7 @@ def api_rewrite_batch(paper_id: str, body: RewriteBatchBody, request: Request):
     for pid in ids:
         _rewrite_target(paper_id, pid)
 
-    g = gate(body.instruction or "批量润色论文段落", True)
+    g = gate_rewrite_instruction(body.instruction or "批量润色论文段落")
     if not g["allowed"]:
         raise HTTPException(400, g["reply"])
 

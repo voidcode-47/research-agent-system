@@ -20,13 +20,24 @@ _JAILBREAK_PATTERNS = [
 ]
 
 # 明确拒绝的跑题请求（即使带有论文词也拒绝：全文翻译、创作、生活服务）
-_HARD_OFF_TOPIC = [
-    re.compile(
-        r"(?:整篇|全文|整本|以下全部).{0,6}(?:翻译|译成|译为)"
-        r"|(?:翻译|译成|译为).{0,6}(?:整篇|全文|整本|以下全部)"
-    ),
-    re.compile(r"(写|代写|生成|创作).{0,8}(小说|作文|文案|邮件|简历|诗歌|故事|演讲稿|剧本)"),
-    re.compile(r"(写|编|做|生成|开发|实现|教我).{0,12}(代码|程序|爬虫|脚本|网页|网站|小程序|外挂)"),
+_FULL_TRANSLATION_RE = re.compile(
+    r"(?:整篇|全文|整本|以下全部).{0,6}(?:翻译|译成|译为)"
+    r"|(?:翻译|译成|译为).{0,6}(?:整篇|全文|整本|以下全部)"
+)
+_CREATION_RE = re.compile(r"(写|代写|生成|创作).{0,8}(小说|作文|文案|邮件|简历|诗歌|故事|演讲稿|剧本)")
+_CODE_REQUEST_RE = re.compile(r"(写|编|做|生成|开发|实现|教我).{0,12}(代码|程序|爬虫|脚本|网页|网站|小程序|外挂)")
+
+_HARD_OFF_TOPIC = [_FULL_TRANSLATION_RE, _CREATION_RE, _CODE_REQUEST_RE]
+
+# 改写要求只是对已选论文段落的补充约束，不是独立请求：
+# 论文段落本身常出现"代码/算法实现/脚本"等词，据此判跑题会误伤正常改写，
+# 因此只保留整篇翻译、创作类与明确的代码请求硬拦项。
+# "改写成…代码/脚本…"属于正常改写表述，故排除"改"字引导的动词，且不把"实现"视为请求。
+_REWRITE_CODE_REQUEST_RE = re.compile(
+    r"(?<!改)(?:写|编|做|生成|开发|教我).{0,12}(?:代码|程序|爬虫|脚本|网页|网站|小程序|外挂)"
+)
+_REWRITE_HARD_OFF_TOPIC = [
+    _FULL_TRANSLATION_RE, _CREATION_RE, _REWRITE_CODE_REQUEST_RE,
 ]
 
 # 编程语言名：仅在缺少论文信号时判定跑题
@@ -107,4 +118,21 @@ def gate(text: str, has_paper: bool) -> dict:
         return {"allowed": False, "reason": "off_topic", "reply": REJECT_OFF_TOPIC}
     if not has_paper:
         return {"allowed": False, "reason": "no_paper", "reply": REJECT_NO_PAPER}
+    return {"allowed": True, "reason": "ok", "reply": ""}
+
+
+def gate_rewrite_instruction(text: str) -> dict:
+    """校验段落改写 / 批量改写 / 方针生成的补充要求。
+
+    该文本是对已选论文段落的改写约束，不是独立用户请求，不能套用
+    "缺少论文信号即跑题"的判定，否则"算法实现""代码结构"这类正文
+    用词会被误判为写代码请求。
+    """
+    t = (text or "").strip()
+    if not t:
+        return {"allowed": True, "reason": "ok", "reply": ""}
+    if is_jailbreak(t):
+        return {"allowed": False, "reason": "jailbreak", "reply": REJECT_JAILBREAK}
+    if any(p.search(t) for p in _REWRITE_HARD_OFF_TOPIC):
+        return {"allowed": False, "reason": "off_topic", "reply": REJECT_OFF_TOPIC}
     return {"allowed": True, "reason": "ok", "reply": ""}
