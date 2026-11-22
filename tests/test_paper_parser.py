@@ -1,11 +1,14 @@
-# -*- coding: utf-8 -*-
 """PDF / Word 校验与结构解析。"""
 import pytest
 
 from paper import parser
 from paper.parser import (
-    PDFValidationError, UploadValidationError, parse_docx, parse_pdf,
-    validate_pdf, validate_upload,
+    PDFValidationError,
+    UploadValidationError,
+    parse_docx,
+    parse_pdf,
+    validate_pdf,
+    validate_upload,
 )
 
 fitz = pytest.importorskip("fitz")
@@ -18,8 +21,8 @@ SAMPLE_LINES = [
     "Deep Learning for Software Testing",
     "",
     "Abstract",
-    "This paper reviews deep learning methods for software testing. "
-    "We summarize fifty studies and compare their datasets and metrics.",
+    ("This paper reviews deep learning methods for software testing. "
+     "We summarize fifty studies and compare their datasets and metrics."),
     "Keywords: deep learning, software testing, survey",
     "",
     "1 Introduction",
@@ -388,8 +391,8 @@ def test_parse_pdf_front_matter_and_grouped_list(tmp_path):
     page = doc.new_page()
     y = 72
     for line in ["Abstract",
-                 "This paper studies image recognition methods and proposes an improved "
-                 "model, with experiments showing clear improvements over baselines.",
+                 ("This paper studies image recognition methods and proposes an improved "
+                  "model, with experiments showing clear improvements over baselines."),
                  "1 Introduction",
                  "Image recognition is important and widely used in many applications."]:
         page.insert_text((72, y), line, fontname="helv", fontsize=10)

@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parent.parent
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows batch launcher")
 
@@ -43,6 +42,7 @@ def test_start_bat_launches_server_from_another_directory(tmp_path):
         input=b"",
         capture_output=True,
         timeout=20,
+        check=False,
     )
 
     assert b"LAUNCHER_SERVER_STARTED" in result.stdout, (

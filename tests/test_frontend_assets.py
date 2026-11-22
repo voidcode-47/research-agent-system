@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """前端资源版本化：哈希、幂等、清单、过期检测与语法校验。"""
 import json
 import os

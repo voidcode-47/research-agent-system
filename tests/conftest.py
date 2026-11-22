@@ -9,7 +9,7 @@ ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from utils import quota  # noqa: E402
+from utils import quota
 
 
 @pytest.fixture(autouse=True)

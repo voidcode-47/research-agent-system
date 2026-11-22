@@ -19,7 +19,7 @@ runtime_lock.release()
 def _child_acquire(path: Path) -> str:
     proc = subprocess.run(
         [sys.executable, "-c", _CHILD, str(path)],
-        cwd=str(ROOT), capture_output=True, text=True, timeout=30,
+        cwd=str(ROOT), capture_output=True, text=True, timeout=30, check=False,
     )
     assert proc.returncode == 0, proc.stderr
     return proc.stdout.strip()

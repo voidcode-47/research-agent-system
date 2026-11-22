@@ -17,16 +17,6 @@ class Settings(BaseSettings):
     # 未配置自定义服务时以本地 Ollama 为默认值。
     DEFAULT_LLM_PROVIDER: str = "ollama"
 
-    # 旧版直连配置仅用于迁移，不再作为独立提供商展示。
-    ZHIPU_API_KEY: str = ""
-    ZHIPU_BASE_URL: str = "https://open.bigmodel.cn/api/paas/v4"
-
-    DASHSCOPE_API_KEY: str = ""
-    DASHSCOPE_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-
-    DEEPSEEK_API_KEY: str = ""
-    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
-
     # 旧版单自定义 API 配置；首次启动迁移到 data/custom_providers.json。
     CUSTOM_API_BASE_URL: str = ""
     CUSTOM_API_KEY: str = ""

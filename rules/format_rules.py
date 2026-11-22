@@ -1,6 +1,6 @@
 """格式规则引擎：10 条纯函数规则，输出可直接用于前端定位的问题列表。"""
 import re
-from itertools import islice
+from itertools import islice, pairwise
 
 from config.paper import DEFAULT_FORMAT
 
@@ -163,7 +163,7 @@ def check_format(parsed: dict, format_spec: dict | None = None) -> dict:
 
     # FMT-003 章节编号断档
     numbered = _numbering_level1(sections, numbering)
-    for (a_num, a_s), (b_num, b_s) in zip(numbered, numbered[1:]):
+    for (a_num, a_s), (b_num, b_s) in pairwise(numbered):
         if b_num > a_num + 1:
             first_pid = _first_body_pid(b_s, body_ids)
             issues.append(_issue(

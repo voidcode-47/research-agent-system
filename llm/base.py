@@ -1,7 +1,8 @@
 """LLM 抽象基类与统一响应数据结构。"""
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Iterator, Optional
+from typing import Any
 
 
 @dataclass
@@ -37,7 +38,7 @@ class BaseLLM(ABC):
     def chat(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
+        tools: list[dict] | None = None,
         temperature: float = 0.7,
     ) -> ChatResponse:
         """同步对话，支持 Function Calling。"""
@@ -46,7 +47,7 @@ class BaseLLM(ABC):
     def stream_chat(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
+        tools: list[dict] | None = None,
         temperature: float = 0.7,
     ) -> Iterator[str]:
         """流式输出，UI 实时显示。"""
@@ -90,4 +91,4 @@ class BaseLLM(ABC):
 
     def close(self) -> None:
         """释放底层 HTTP 连接；无状态实现无需覆盖。"""
-        return None
+        return

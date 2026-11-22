@@ -1,15 +1,13 @@
-# -*- coding: utf-8 -*-
 """server.py（FastAPI Web 服务）API 层测试。"""
+import threading
 from unittest.mock import patch
 from urllib.parse import quote
-import threading
 
 import pytest
+from fastapi.testclient import TestClient
 
 import server
-from fastapi.testclient import TestClient
-from utils import auth, prefs
-from utils import custom_providers
+from utils import auth, custom_providers, prefs
 
 client = TestClient(server.app)
 
@@ -58,8 +56,9 @@ def _clean_tasks():
 
 # ---------- 基础 ----------
 def test_switch_custom_model_updates_saved_effective_and_factory_model(monkeypatch):
-    from llm.factory import LLMFactory
     from unittest.mock import MagicMock
+
+    from llm.factory import LLMFactory
     monkeypatch.setattr("llm.openai_llm.OpenAI", MagicMock())
     created = client.post("/api/custom-providers", json={
         "name": "Test gateway", "protocol": "openai",

@@ -1,10 +1,13 @@
-# -*- coding: utf-8 -*-
 """输入守卫：越狱 / 跑题 / 非论文请求的固定拒答。"""
 import pytest
 
 from config.paper import REJECT_JAILBREAK, REJECT_NO_PAPER, REJECT_OFF_TOPIC
 from utils.guard import (
-    gate, gate_rewrite_instruction, has_paper_signal, is_jailbreak, is_off_topic,
+    gate,
+    gate_rewrite_instruction,
+    has_paper_signal,
+    is_jailbreak,
+    is_off_topic,
 )
 
 

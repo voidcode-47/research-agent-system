@@ -1,12 +1,13 @@
 """LLM 工厂测试。"""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from llm.base import ChatResponse, ToolCall
-from llm import factory
-from llm.factory import LLMFactory
+import pytest
+
 from config.llm_config import PROVIDER_CONFIG, get_provider_config
 from config.settings import settings
+from llm import factory
+from llm.base import ChatResponse, ToolCall
+from llm.factory import LLMFactory
 
 
 @pytest.fixture(autouse=True)
@@ -81,7 +82,7 @@ class TestHealthCheck:
     def test_unreachable(self):
         llm = self._make_local_llm()
         llm.ping = lambda: False
-        llm.list_models = lambda: []
+        llm.list_models = list
         h = llm.health_check()
         assert h["reachable"] is False
         assert h["model_ready"] is False
@@ -89,7 +90,7 @@ class TestHealthCheck:
     def test_service_up_no_model(self):
         llm = self._make_local_llm()
         llm.ping = lambda: True
-        llm.list_models = lambda: []
+        llm.list_models = list
         h = llm.health_check()
         assert h["reachable"] is True
         assert h["models_loaded"] is False
@@ -106,8 +107,9 @@ class TestHealthCheck:
 
     def test_tool_call_unsupported_fallback(self):
         """本地模型不支持 Function Calling（400）时降级为纯对话。"""
-        from llm.openai_llm import OpenAICompatibleLLM
         from openai import BadRequestError
+
+        from llm.openai_llm import OpenAICompatibleLLM
 
         with patch("llm.openai_llm.OpenAI") as MockOpenAI:
             client = MagicMock()
@@ -152,7 +154,7 @@ class TestProviderConfig:
             get_provider_config("nonexistent")
 
     def test_all_providers_have_required_fields(self):
-        for name, config in PROVIDER_CONFIG.items():
+        for config in PROVIDER_CONFIG.values():
             assert "label" in config
             assert "default_model" in config
             assert "base_url" in config

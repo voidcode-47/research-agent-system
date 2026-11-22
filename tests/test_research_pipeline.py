@@ -1,15 +1,14 @@
-# -*- coding: utf-8 -*-
 """文献调研流水线：检索参考文献 → 生成综合报告（进度 / 降级 / 失败保留文献）。"""
-import os
 import datetime
+import os
 from pathlib import Path
 
 import pytest
 
 import server
-from utils import quota
 from llm.base import ChatResponse
 from server import ResearchRequest
+from utils import quota
 
 TOPIC = "人脸识别"
 

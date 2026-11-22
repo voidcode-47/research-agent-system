@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """存储层并发与恢复：版本号唯一、索引不丢条目、索引可重建。"""
 import json
 import os

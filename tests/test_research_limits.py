@@ -12,7 +12,6 @@ from config.settings import settings
 from llm.base import ChatResponse
 from utils import auth, quota
 
-
 REPORT = "## Research design\n\n" + "The method compares a baseline with the proposed model. [1]\n" * 8
 REFS = [{"title": "Methods study", "authors": "Example Author", "year": 2024,
          "journal": "Methods Journal", "doi": "10.0000/example", "abstract": "Comparison methods."}]

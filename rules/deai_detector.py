@@ -72,41 +72,41 @@ _ZH_AI_WORDS = (
 _EN_HYPE_RE = re.compile(
     r"\b(paves? the way for|opens? (up )?new avenues?|sheds? light on|"
     r"bridges? the gap|of paramount importance|revolutioni[sz](e|es|ed|ing)|"
-    r"pivotal (role|step|moment)|crucial step toward|transformative)\b", re.I
+    r"pivotal (role|step|moment)|crucial step toward|transformative)\b", re.IGNORECASE
 )
 _EN_OPENER_RE = re.compile(
     r"^(in recent years|with the (rapid )?(development|growth|advancement) of|"
-    r"despite recent advances|over the past (few|several) years)\b", re.I
+    r"despite recent advances|over the past (few|several) years)\b", re.IGNORECASE
 )
 _EN_BOILER_RE = re.compile(
-    r"\b(it is worth noting that|it should be (noted|emphasized) that|notably|importantly)\b", re.I
+    r"\b(it is worth noting that|it should be (noted|emphasized) that|notably|importantly)\b", re.IGNORECASE
 )
 _EN_VAGUE_RE = re.compile(
     r"\b(experts? (argue|believe|say|suggest)|studies (show|suggest|indicate)|"
     r"research (shows|suggests|indicates)|many (researchers|scholars) (argue|believe)|"
-    r"it is widely (known|believed))\b", re.I
+    r"it is widely (known|believed))\b", re.IGNORECASE
 )
 _EN_OVERCLAIM_RE = re.compile(
-    r"\b(demonstrat(e|es|ed|ing)|prove[sd]?|establish(es|ed)?|confirm(s|ed)?|guarantee[sd]?)\b", re.I
+    r"\b(demonstrat(e|es|ed|ing)|prove[sd]?|establish(es|ed)?|confirm(s|ed)?|guarantee[sd]?)\b", re.IGNORECASE
 )
-_EN_NOVELTY_RE = re.compile(r"\b(to the best of our knowledge|for the first time)\b", re.I)
-_EN_NOVEL_WORD_RE = re.compile(r"\bnovel\b", re.I)
+_EN_NOVELTY_RE = re.compile(r"\b(to the best of our knowledge|for the first time)\b", re.IGNORECASE)
+_EN_NOVEL_WORD_RE = re.compile(r"\bnovel\b", re.IGNORECASE)
 _EN_INTENSIFIER_RE = re.compile(
     r"\b(extensive|comprehensive|thorough)\s+experiments?\b|\ba wide range of\b|"
-    r"\bnumerous\b|\bvarious\b", re.I
+    r"\bnumerous\b|\bvarious\b", re.IGNORECASE
 )
 _EN_AI_VOCAB_RE = re.compile(
     r"\b(delv(e|es|ed|ing)|underscor(e|es|ed|ing)|intricate|tapestry|testament|"
     r"showcas(e|es|ed|ing)|foster(s|ed|ing)?|leverag(e|es|ed|ing)|realm|"
-    r"seamless(ly)?|landscape)\b", re.I
+    r"seamless(ly)?|landscape)\b", re.IGNORECASE
 )
-_EN_HEDGE_RE = re.compile(r"\b(somewhat|relatively|fairly|to some extent|quite)\b", re.I)
-_EN_NEG_PARALLEL_RE = re.compile(r"\bnot (just|only)\b[^.]{0,80}\bbut\b", re.I)
+_EN_HEDGE_RE = re.compile(r"\b(somewhat|relatively|fairly|to some extent|quite)\b", re.IGNORECASE)
+_EN_NEG_PARALLEL_RE = re.compile(r"\bnot (just|only)\b[^.]{0,80}\bbut\b", re.IGNORECASE)
 _EN_CONNECTOR_RE = re.compile(
     r"^(moreover|furthermore|additionally|in particular|notably|importantly|"
-    r"consequently|overall|in summary|to conclude)\b", re.I
+    r"consequently|overall|in summary|to conclude)\b", re.IGNORECASE
 )
-_EN_SUBORD_RE = re.compile(r"\b(which|that|while|whereas|although|because|whereby)\b", re.I)
+_EN_SUBORD_RE = re.compile(r"\b(which|that|while|whereas|although|because|whereby)\b", re.IGNORECASE)
 _EN_CITE_RE = re.compile(
     r"\(\s*[A-Z][A-Za-z\-]+(?:\s+et al\.)?,?\s*\d{4}\s*\)|\[\d+(?:\s*[,–-]\s*\d+)*\]"
 )
@@ -141,7 +141,7 @@ def _split_sentences(text: str, lang: str) -> list[str]:
 
     protected = text or ""
     for abbr in _EN_ABBREV:
-        protected = re.sub(re.escape(abbr), abbr.replace(".", "\u00a7"), protected, flags=re.I)
+        protected = re.sub(re.escape(abbr), abbr.replace(".", "\u00a7"), protected, flags=re.IGNORECASE)
     protected = re.sub(
         r"(\d)\.(\d)",
         lambda m: m.group(1) + "\u00a7" + m.group(2),
@@ -345,7 +345,7 @@ def _paragraph_stats(lang: str, paragraphs: list[str], items: list[dict]) -> lis
                 hits.append("长句占比偏高")
                 points += 1
 
-        risk_points = int(round(points))
+        risk_points = round(points)
         risk = "high" if risk_points >= 4 else ("medium" if risk_points >= 2 else "low")
         stats.append({
             "index": p_idx,

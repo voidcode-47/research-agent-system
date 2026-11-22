@@ -1,7 +1,7 @@
 """自定义 Anthropic Messages 与 Gemini REST 协议适配。"""
 import json
 import uuid
-from typing import Iterator, Optional
+from collections.abc import Iterator
 from urllib.parse import quote
 
 import httpx
@@ -225,7 +225,7 @@ class CustomProtocolLLM(BaseLLM):
         except Exception:
             pass
 
-    def chat(self, messages: list[dict], tools: Optional[list[dict]] = None, temperature: float = 0.7, **options) -> ChatResponse:
+    def chat(self, messages: list[dict], tools: list[dict] | None = None, temperature: float = 0.7, **options) -> ChatResponse:
         if self.protocol == "anthropic":
             payload = anthropic_messages(messages, tools, self.model, temperature)
             if options.get("max_tokens"):
@@ -240,7 +240,7 @@ class CustomProtocolLLM(BaseLLM):
                                  timeout=options.get("timeout", 60.0))
         return parse_gemini_response(response.json())
 
-    def stream_chat(self, messages: list[dict], tools: Optional[list[dict]] = None, temperature: float = 0.7, **options) -> Iterator[str]:
+    def stream_chat(self, messages: list[dict], tools: list[dict] | None = None, temperature: float = 0.7, **options) -> Iterator[str]:
         if self.protocol == "anthropic":
             payload = anthropic_messages(messages, tools, self.model, temperature)
             payload["stream"] = True

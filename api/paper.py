@@ -4,9 +4,8 @@
 写法与 server.py 的 RESEARCH_TASKS 保持一致（含上限裁剪）。
 """
 import asyncio
-import datetime
 import contextvars
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import datetime
 import json
 import os
 import queue
@@ -16,6 +15,7 @@ import tempfile
 import threading
 import traceback
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote
 
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
@@ -29,9 +29,9 @@ from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
 from config.paper import (
+    DEAI_STRENGTHS,
     DEFAULT_FORMAT,
     DEFAULT_REQUIREMENT,
-    DEAI_STRENGTHS,
     DIAGNOSIS_DIMENSIONS,
     FORMAT_TEMPLATES,
     PAPER_LEVELS,
@@ -44,10 +44,8 @@ from config.prompts import PAPER_QA_PROMPT
 from config.settings import settings
 from llm.factory import LLMFactory
 from llm.gateway import LLMGateway
-from paper import backup, store
+from paper import backup, contracts, references, store
 from paper import inputs as paper_inputs
-from paper import contracts
-from paper import references
 from paper.analysis import DiagnosisCancelled, DiagnosisStale, diagnose, total_score
 from paper.chunks import build_qa_context
 from paper.export import (

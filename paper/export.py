@@ -626,6 +626,7 @@ def _entry_new_text(links: list[tuple[str, int | None]],
 
 def _clean_rpr(rpr):
     from copy import deepcopy
+
     from docx.oxml.ns import qn
 
     if rpr is None:
@@ -959,7 +960,7 @@ def _export_from_original(paper_id: str, path: str, paragraphs: list[dict],
                 page_break=True if (is_heading and level == 1 and page_break_heading) else None,
             )
 
-    rev_date = datetime.datetime.now(datetime.timezone.utc).strftime(
+    rev_date = datetime.datetime.now(datetime.UTC).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
     rev_id = 1
@@ -1053,7 +1054,7 @@ def export_docx(paper_id: str, paragraphs: list[dict], requirement: dict | None,
     normal.paragraph_format.space_after = Pt(space_after)
 
     heading_sizes = {1: 16, 2: 14, 3: 13, 4: 12}
-    rev_date = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    rev_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     rev_id = 1
     if tracked:
         try:
@@ -1217,10 +1218,11 @@ def _pdf_font_names() -> tuple[str, str]:
 
 def _add_pdf_table(story: list, table: dict, body_style, body_font: str,
                    size: float, page_width: float) -> None:
+    from xml.sax.saxutils import escape
+
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
-    from xml.sax.saxutils import escape
 
     rows = table.get("rows") or []
     if not rows:

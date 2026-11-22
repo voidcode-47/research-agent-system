@@ -1,7 +1,7 @@
 """重试与退避装饰器。"""
-import time
 import functools
-from typing import Callable, Type, Tuple
+import time
+from collections.abc import Callable
 
 from utils.logger import get_logger
 
@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 def retry(
     max_attempts: int = 3,
     backoff: float = 1.5,
-    exceptions: Tuple[Type[Exception], ...] = (Exception,),
+    exceptions: tuple[type[Exception], ...] = (Exception,),
 ) -> Callable:
     """指数退避重试装饰器。
 

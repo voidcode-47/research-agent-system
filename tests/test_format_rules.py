@@ -1,10 +1,10 @@
-# -*- coding: utf-8 -*-
 """格式规则引擎：10 条规则与评分。"""
-from rules.format_rules import check_format
-
 import builtins
+
 import pytest
+
 from rules import format_rules
+from rules.format_rules import check_format
 
 ABSTRACT_OK = "本文围绕深度学习的软件测试方法展开研究。" * 12  # 240 字
 KEYWORDS_OK = ["深度学习", "软件测试", "综述"]

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """LLM 网关：任务白名单 / JSON 提取 / 重试 / 模型调用失败直报。"""
 import pytest
 

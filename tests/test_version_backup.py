@@ -1,9 +1,9 @@
-# -*- coding: utf-8 -*-
 """版本压缩归档、备份与恢复。"""
 import io
 import json
 import os
 import zipfile
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -204,7 +204,7 @@ def test_backup_restore_creates_new_paper_and_preserves_archive(env):
         "requirement": store.load_requirement(pid),
         "analysis": store.load_analysis(pid, "level"),
         "similar": store.load_similar(pid),
-        "original": open(os.path.join(store.paper_dir(pid), "original.pdf"), "rb").read(),
+        "original": Path(store.paper_dir(pid), "original.pdf").read_bytes(),
         "archived_v2": store.load_version(pid, 2),
     }
 
@@ -224,7 +224,7 @@ def test_backup_restore_creates_new_paper_and_preserves_archive(env):
     assert store.load_analysis(new_pid, "level")["score"] == before["analysis"]["score"]
     assert store.load_similar(new_pid) == before["similar"]
     assert store.load_version(new_pid, 2) == before["archived_v2"]
-    assert open(os.path.join(store.paper_dir(new_pid), "original.pdf"), "rb").read() \
+    assert Path(store.paper_dir(new_pid), "original.pdf").read_bytes() \
         == before["original"]
 
     # 原论文保持不变，恢复副本出现在列表中

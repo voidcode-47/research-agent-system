@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Markdown → Word 转换测试。"""
 from io import BytesIO
 

@@ -1,9 +1,9 @@
 """四维诊断：层次 / 内容可实现性 / 正文格式 / 去 AI 味（含 AI 生成率）。"""
-import datetime
 import contextvars
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import datetime
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config.paper import DIAGNOSIS_DIMENSIONS, PAPER_LEVELS
 from config.prompts import (

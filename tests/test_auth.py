@@ -1,14 +1,12 @@
-# -*- coding: utf-8 -*-
 """管理员认证、模型权限与配额豁免测试。"""
 import threading
 
 import pytest
+from fastapi.testclient import TestClient
 
 import server
 from config.settings import settings
-from fastapi.testclient import TestClient
-from utils import auth, quota
-from utils import custom_providers
+from utils import auth, custom_providers, quota
 from utils import prefs as prefs_module
 
 

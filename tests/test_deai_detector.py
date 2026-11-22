@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """AI 味规则检测：分数、分级、句级理由与特征统计。"""
 from rules.deai_detector import detect, detect_language, estimate_ai_rate
 

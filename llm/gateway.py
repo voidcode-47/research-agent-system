@@ -12,7 +12,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.S | re.I)
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
 
 # OpenAICompatibleLLM 在 Key 无效 / 限流 / 本地未加载模型时把错误文本当内容返回
 _PROVIDER_ERROR_PREFIXES = ("API 调用失败", "⚠️", "本地服务")
@@ -165,7 +165,7 @@ class LLMGateway:
                     content = getattr(resp, "content", "") or ""
                     if _provider_error(content):
                         msg = content.strip()[:200]
-                        if re.search(r"401|403|authentication|api[\s_-]*key", msg, re.I):
+                        if re.search(r"401|403|authentication|api[\s_-]*key", msg, re.IGNORECASE):
                             msg += "。请在侧边栏「添加模型」并填写有效 API Key 后重试。"
                         raise _ModelCallFailed(msg)
                     completion_received = completion_received or bool(content.strip())

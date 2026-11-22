@@ -112,7 +112,7 @@ def test_startup_restores_interrupted_task_through_status_api(monkeypatch):
 
     task_id, _ = api_paper._reserve_task("upload", "p_test", "")
     api_paper.PAPER_TASKS.clear()
-    monkeypatch.setattr(auth, "ensure_admin", lambda: {})
+    monkeypatch.setattr(auth, "ensure_admin", dict)
 
     with TestClient(app) as client:
         response = client.get(f"/api/paper/upload/{task_id}")
@@ -129,11 +129,10 @@ def test_startup_refuses_second_instance(monkeypatch):
     from server import app, auth
     from utils import runtime_lock
 
-    monkeypatch.setattr(auth, "ensure_admin", lambda: {})
+    monkeypatch.setattr(auth, "ensure_admin", dict)
     monkeypatch.setattr(runtime_lock, "acquire", lambda path: False)
-    with pytest.raises(RuntimeError, match="另一个服务实例"):
-        with TestClient(app):
-            pass
+    with pytest.raises(RuntimeError, match="另一个服务实例"), TestClient(app):
+        pass
 
 
 def test_journal_write_failure_does_not_break_task(monkeypatch):

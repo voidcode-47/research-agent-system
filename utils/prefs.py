@@ -1,12 +1,11 @@
-# -*- coding: utf-8 -*-
 """UI 偏好持久化：记住侧边栏选择的提供商/模型与研究默认参数，重启后自动恢复。"""
 import copy
 import json
 import os
 
-from utils.logger import get_logger
 from utils.atomic_file import atomic_write
 from utils.config_io import transaction
+from utils.logger import get_logger
 
 logger = get_logger(__name__)
 

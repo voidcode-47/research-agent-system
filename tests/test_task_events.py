@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """任务 SSE 通知。"""
 import json
 

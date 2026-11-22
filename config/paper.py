@@ -120,9 +120,6 @@ REWRITE_MODES: dict[str, str] = {
     "tighten": "精简压缩",
 }
 
-# 必须保留项（需求确认时的多选）
-DEAI_KEEP_OPTIONS = ["数据", "术语", "引用"]
-
 DEFAULT_FORMAT: dict = {
     "template": "generic_thesis",
     # 中文字体（写入 w:eastAsia）与英文字体/数字（写入 w:ascii/w:hAnsi）
@@ -178,7 +175,6 @@ DEFAULT_REQUIREMENT: dict = {
 LLM_TASKS: dict[str, dict] = {
     "research_report": {"label": "文献调研报告", "max_tokens": 3500},
     "research_followup": {"label": "调研报告追问", "max_tokens": 1024},
-    "intake_extract": {"label": "上传信息提取", "max_tokens": 800},
     "level_diagnose": {"label": "论文层次诊断", "max_tokens": 2500},
     "feasibility": {"label": "内容可实现性评估", "max_tokens": 2500},
     "deai_detect": {"label": "AI 味检测与建议", "max_tokens": 1600},

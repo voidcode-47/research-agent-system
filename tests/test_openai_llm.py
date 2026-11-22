@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """OpenAI 兼容 LLM 测试：max_tokens 透传、429 限流友好提示、Function Calling 降级。"""
 from unittest.mock import MagicMock, patch
 

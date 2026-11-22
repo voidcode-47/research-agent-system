@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """学术检索工具测试（mock 网络）：Crossref / OpenAlex 解析、被引/OA 标记、失败上报。"""
 from unittest.mock import MagicMock, patch
 
@@ -87,7 +86,7 @@ class TestAcademicSearch:
             )
             out = AcademicSearchTool().execute("q", max_results=1)
         assert "<p>" not in out
-        assert len([l for l in out.splitlines() if "长摘要" in l][0]) <= 400 + 10
+        assert len(next(l for l in out.splitlines() if "长摘要" in l)) <= 400 + 10
 
     def test_crossref_failure_still_returns_message(self):
         with patch("requests.get") as mock_get:

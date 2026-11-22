@@ -6,17 +6,16 @@
 启动方式:
     python server.py            # 等价于 uvicorn server:app --host 127.0.0.1 --port 8501
 """
-import datetime
 import asyncio
-import queue
+import datetime
 import os
+import queue
 import re
 import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
-from typing import Optional
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -24,18 +23,17 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from config.settings import settings
+from api import paper as paper_api
 from config.llm_config import PROVIDER_CONFIG, get_provider_config, list_providers
+from config.settings import settings
 from llm.factory import LLMFactory
 from llm.gateway import LLMGateway
-from api import paper as paper_api
-from utils import auth, frontend_assets, runtime_lock
-from utils import custom_providers
-from utils.logger import get_logger
-from utils.prefs import load_prefs, save_prefs
-from utils.env_file import update_env
+from utils import auth, custom_providers, frontend_assets, runtime_lock
 from utils.atomic_file import atomic_write
 from utils.config_io import transaction as config_transaction
+from utils.env_file import update_env
+from utils.logger import get_logger
+from utils.prefs import load_prefs, save_prefs
 
 logger = get_logger(__name__)
 
@@ -119,13 +117,6 @@ _FAIL_MARKERS = ("⚠️ API 限流（请求过于频繁）", "API 调用失败"
 # 已完成研究任务的保留上限（防止 RESEARCH_TASKS 无界增长）
 MAX_RESEARCH_TASKS = 200
 
-# 云提供商 → (.env 的 API Key 变量, .env 的 Base URL 变量, 官方默认 Base URL)
-# 用于前端填写/保存各云厂商的 Key 与 URL（key 不再内置在项目文件里）
-CLOUD_ENV_MAP: dict[str, tuple[str, str, str]] = {
-    provider: (config["env_key"], config["env_base_url"], config["base_url"])
-    for provider, config in PROVIDER_CONFIG.items() if config.get("env_key")
-}
-
 
 def _is_report_ok(text: str) -> bool:
     """判断报告内容是否为有效生成结果（非限流/调用失败/降级产物）。"""
@@ -152,8 +143,8 @@ class ResearchRequest(BaseModel):
     topic: str
     max_results: int = 5
     detailed: bool = True
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
 
 
 class FollowupRequest(BaseModel):
@@ -162,28 +153,25 @@ class FollowupRequest(BaseModel):
 
 
 class SettingsRequest(BaseModel):
-    provider: Optional[str] = None
-    model: Optional[str] = None
-    custom_base_url: Optional[str] = None
-    custom_api_key: Optional[str] = None
-    custom_model: Optional[str] = None
-    # 云提供商（deepseek/zhipu/qwen）的临时 Key 与 Base URL，由前端填写
-    cloud_api_key: Optional[str] = None
-    cloud_base_url: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
+    custom_base_url: str | None = None
+    custom_api_key: str | None = None
+    custom_model: str | None = None
     # 设置页的研究默认参数
-    research_max_results: Optional[int] = None
-    research_detailed: Optional[bool] = None
+    research_max_results: int | None = None
+    research_detailed: bool | None = None
     # 本地服务 Base URL（设置页「模型提供商」直接修改）
-    ollama_base_url: Optional[str] = None
-    lmstudio_base_url: Optional[str] = None
+    ollama_base_url: str | None = None
+    lmstudio_base_url: str | None = None
 
 
 class HealthCheckRequest(BaseModel):
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
     # 前端刚填写的临时 Key / URL（未保存时也能直接测试连接）
-    api_key: Optional[str] = None
-    base_url: Optional[str] = None
+    api_key: str | None = None
+    base_url: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -345,12 +333,6 @@ def api_providers(request: Request):
             "read_only": True,
         }
 
-    cloud_status = {}
-    for p, (key_env, base_env, default_base) in CLOUD_ENV_MAP.items():
-        cloud_status[p] = {
-            "has_key": bool(getattr(settings, key_env, "")),
-            "base_url": getattr(settings, base_env, "") or default_base,
-        }
     return {
         "providers": available,
         "labels": labels,
@@ -359,7 +341,7 @@ def api_providers(request: Request):
         "effective_provider": provider,
         "effective_model": model,
         "custom_models": prefs.get("custom_models", {}),
-        "cloud": cloud_status,
+        "cloud": {},
         "custom_api": {
             "base_url": settings.CUSTOM_API_BASE_URL,
             "api_key": bool(settings.CUSTOM_API_KEY),
@@ -442,23 +424,6 @@ def api_save_settings(req: SettingsRequest):
                 updates["CUSTOM_API_KEY"] = key
         if req.custom_model is not None:
             updates["CUSTOM_API_MODEL"] = req.custom_model.strip()
-        if updates:
-            update_env(updates)
-            for name, value in updates.items():
-                setattr(settings, name, value)
-
-    # 旧版云提供商配置已从设置中移除；新服务均通过本地自定义服务配置管理。
-    if provider in CLOUD_ENV_MAP:
-        key_env, base_env, _default = CLOUD_ENV_MAP[provider]
-        updates = {}
-        if req.cloud_api_key is not None:
-            key = req.cloud_api_key.strip()
-            if key:  # 留空视为「不修改」，避免误清空已保存的 Key
-                updates[key_env] = key
-        if req.cloud_base_url is not None:
-            url = req.cloud_base_url.strip()
-            if url:
-                updates[base_env] = url
         if updates:
             update_env(updates)
             for name, value in updates.items():
@@ -1020,10 +985,11 @@ async def _cache_static_assets(request: Request, call_next):
 
 
 if __name__ == "__main__":
+    import socket
     import threading
     import time
-    import socket
     import webbrowser
+
     import uvicorn
 
     print("=" * 50)

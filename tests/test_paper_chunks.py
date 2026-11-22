@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """论文问答分块与检索：章节层级、长段切分、表格块、预算与引用过滤。"""
 from paper import chunks
 
@@ -78,7 +77,7 @@ def test_long_paragraph_splits_at_sentences_with_offsets():
         if i:
             assert piece["start"] == pieces[i - 1]["end"]
 
-    context, evidence = chunks.search(index, "公开数据集准确率")
+    _context, evidence = chunks.search(index, "公开数据集准确率")
     assert evidence and evidence[0]["id"] == "p_0001"
     assert evidence[0]["segment"] == 0
 

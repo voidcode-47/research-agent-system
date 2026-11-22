@@ -16,8 +16,7 @@ import uuid
 import zipfile
 import zlib
 
-from paper import store
-from paper import contracts
+from paper import contracts, store
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -56,19 +55,6 @@ def _json_bytes(data) -> bytes:
     return json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
 
 
-def _sha256_file(path: str) -> tuple[str, int]:
-    digest = hashlib.sha256()
-    size = 0
-    with open(path, "rb") as f:
-        while True:
-            chunk = f.read(1024 * 1024)
-            if not chunk:
-                break
-            size += len(chunk)
-            digest.update(chunk)
-    return digest.hexdigest(), size
-
-
 def _backup_files(paper_id: str) -> list[tuple[str, str]]:
     base = store.paper_dir(paper_id)
     out = []
@@ -84,8 +70,7 @@ def _backup_files(paper_id: str) -> list[tuple[str, str]]:
             if os.path.islink(full):
                 raise BackupError("论文目录包含符号链接，拒绝备份")
             rel = os.path.join(rel_root, name).replace(os.sep, "/")
-            if rel.startswith("./"):
-                rel = rel[2:]
+            rel = rel.removeprefix("./")
             rel = f"paper/{rel}" if not rel.startswith("paper/") else rel
             if _ALLOWED_RE.match(rel):
                 out.append((rel, full))

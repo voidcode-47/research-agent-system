@@ -5,13 +5,11 @@
 import math
 import os
 import re
-from typing import Optional
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-MAX_FILE_MB = 50
 MAX_PAGES = 200
 MIN_TEXT_CHARS = 100
 
@@ -112,7 +110,7 @@ class PDFValidationError(UploadValidationError):
 
 
 def validate_pdf(filename: str, head_bytes: bytes,
-                 content_type: Optional[str] = None) -> None:
+                 content_type: str | None = None) -> None:
     """校验扩展名 .pdf、文件头 %PDF-、Content-Type；任一不符抛 PDFValidationError。"""
     name = (filename or "").strip()
     ext = os.path.splitext(name)[1].lower()
@@ -125,7 +123,7 @@ def validate_pdf(filename: str, head_bytes: bytes,
 
 
 def validate_upload(filename: str, head_bytes: bytes,
-                    content_type: Optional[str] = None) -> str:
+                    content_type: str | None = None) -> str:
     """校验上传文件并返回类型 "pdf" / "docx"；不符抛 UploadValidationError。"""
     name = (filename or "").strip()
     ext = os.path.splitext(name)[1].lower()
@@ -166,7 +164,7 @@ def _join_lines(lines: list[str]) -> str:
     return out.strip()
 
 
-def _detect_heading(line: str) -> Optional[tuple[int, str]]:
+def _detect_heading(line: str) -> tuple[int, str] | None:
     """返回 (level, title) 或 None。"""
     text = line.strip()
     if not text or len(text) > 60:
@@ -205,9 +203,7 @@ def _is_caption_line(text: str) -> bool:
     if not _CAPTION_RE.match(t):
         return False
     # “表2，全模型共…参数。”是正文引用，不是表题
-    if re.match(r"^(?:表|table)\s*\d+\s*[，,]", t, re.IGNORECASE) and _ends_sentence(t):
-        return False
-    return True
+    return not (re.match(r"^(?:表|table)\s*\d+\s*[，,]", t, re.IGNORECASE) and _ends_sentence(t))
 
 
 def _is_toc_entry(text: str) -> bool:
@@ -222,7 +218,7 @@ def _is_toc_entry(text: str) -> bool:
     )
 
 
-def _toc_start_index(lines: list[tuple[str, object]]) -> Optional[int]:
+def _toc_start_index(lines: list[tuple[str, object]]) -> int | None:
     """返回目录区域起始行；同一页可能同时有封面和目录。"""
     leader_rows = [
         i for i, (text, _) in enumerate(lines)
@@ -747,14 +743,14 @@ def parse_pdf(path: str, filename: str = "", progress=None,
     paragraphs: list[dict] = []
     sections: list[dict] = []
     tables: list[dict] = []
-    current_section: Optional[dict] = None
+    current_section: dict | None = None
     buf_lines: list[str] = []
     buf_page = 1
     buf_is_ref = False
     counter = 0
 
-    def add_paragraph(text: str, page: int, ptype: str, level: Optional[int] = None,
-                      section: Optional[dict] = None, detached: bool = False) -> dict:
+    def add_paragraph(text: str, page: int, ptype: str, level: int | None = None,
+                      section: dict | None = None, detached: bool = False) -> dict:
         nonlocal counter
         counter += 1
         pid = f"p_{counter:04d}"
@@ -789,8 +785,8 @@ def parse_pdf(path: str, filename: str = "", progress=None,
         add_paragraph(text, buf_page, ptype)
         buf_is_ref = False
 
-    page_base_section: Optional[dict] = None
-    page_headings: list[tuple[Optional[float], dict]] = []
+    page_base_section: dict | None = None
+    page_headings: list[tuple[float | None, dict]] = []
 
     def add_table(entry: dict, page_no: int) -> None:
         y = entry.get("y")
@@ -828,8 +824,8 @@ def parse_pdf(path: str, filename: str = "", progress=None,
     cover_open = True
     cover_count = 0
     body_left, has_indent = _pdf_body_geometry(pages)
-    last_caption_page: Optional[int] = None
-    last_caption_bottom: Optional[float] = None
+    last_caption_page: int | None = None
+    last_caption_bottom: float | None = None
 
     for page_no, page in enumerate(pages, start=1):
         _check_cancel(should_cancel)
@@ -1005,7 +1001,7 @@ def parse_pdf(path: str, filename: str = "", progress=None,
 _DOCX_HEADING_STYLE_RE = re.compile(r"(?:heading|标题)\s*(\d)", re.IGNORECASE)
 
 
-def _docx_heading_level(style_name: str) -> Optional[int]:
+def _docx_heading_level(style_name: str) -> int | None:
     m = _DOCX_HEADING_STYLE_RE.search(style_name or "")
     if not m:
         return None
@@ -1093,14 +1089,14 @@ def parse_docx(path: str, filename: str = "", progress=None,
     paragraphs: list[dict] = []
     sections: list[dict] = []
     tables: list[dict] = []
-    current_section: Optional[dict] = None
+    current_section: dict | None = None
     buf_lines: list[str] = []
     buf_is_ref = False
     counter = 0
     chars_so_far = 0
 
-    def add_paragraph(raw: str, ptype: str, level: Optional[int] = None,
-                      detached: bool = False) -> Optional[dict]:
+    def add_paragraph(raw: str, ptype: str, level: int | None = None,
+                      detached: bool = False) -> dict | None:
         nonlocal counter, chars_so_far
         text = raw.strip()
         if not text:

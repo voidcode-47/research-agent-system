@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 """导出：列表块还原、封面/目录保留、原生表格不压成正文。"""
 import io
 
 import pytest
 
-import paper.export as export
+from paper import export
 
 docx = pytest.importorskip("docx")
 fitz = pytest.importorskip("fitz")

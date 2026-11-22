@@ -1,7 +1,7 @@
 """Bounded, section-balanced evidence samples with explicit coverage metadata."""
 import re
 
-_KEY_SECTION = re.compile(r"问题|方法|数据|实验|结果|结论|question|method|data|experiment|result|conclusion", re.I)
+_KEY_SECTION = re.compile(r"问题|方法|数据|实验|结果|结论|question|method|data|experiment|result|conclusion", re.IGNORECASE)
 _EXCLUDED = {"heading", "caption", "cover", "toc", "table", "table_note", "reference"}
 
 

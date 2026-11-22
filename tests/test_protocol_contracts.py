@@ -10,7 +10,6 @@ from openai import APIError, APIStatusError, APITimeoutError
 from llm.openai_llm import OpenAICompatibleLLM
 from llm.protocol_llm import CustomProtocolLLM
 
-
 MESSAGES = [{"role": "user", "content": "Explain the method."}]
 
 

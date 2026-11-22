@@ -6,7 +6,7 @@
 import json
 import os
 import re
-from typing import Iterator, Optional
+from collections.abc import Iterator
 
 
 def _clean_no_proxy() -> None:
@@ -25,12 +25,12 @@ def _clean_no_proxy() -> None:
 _clean_no_proxy()
 
 from openai import (
-    OpenAI,
-    APIError,
     APIConnectionError,
+    APIError,
     APITimeoutError,
-    RateLimitError,
     InternalServerError,
+    OpenAI,
+    RateLimitError,
 )
 
 from llm.base import BaseLLM, ChatResponse, ToolCall
@@ -98,11 +98,11 @@ class OpenAICompatibleLLM(BaseLLM):
     def chat(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
+        tools: list[dict] | None = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
-        timeout: Optional[float] = None,
-        extra_body: Optional[dict] = None,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
+        extra_body: dict | None = None,
     ) -> ChatResponse:
         """同步对话。
 
@@ -205,11 +205,11 @@ class OpenAICompatibleLLM(BaseLLM):
     def stream_chat(
         self,
         messages: list[dict],
-        tools: Optional[list[dict]] = None,
+        tools: list[dict] | None = None,
         temperature: float = 0.7,
-        max_tokens: Optional[int] = None,
-        timeout: Optional[float] = None,
-        extra_body: Optional[dict] = None,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
+        extra_body: dict | None = None,
     ) -> Iterator[str]:
         """流式输出。"""
         kwargs: dict = {

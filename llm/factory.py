@@ -7,10 +7,9 @@
 避免拖慢页面首屏加载。
 """
 import re
-from typing import Optional
 
-from config.settings import settings
 from config.llm_config import get_provider_config
+from config.settings import settings
 from llm.base import BaseLLM
 from utils.logger import get_logger
 
@@ -49,12 +48,12 @@ class LLMFactory:
     """LLM 工厂，统一管理多提供商。"""
 
     @staticmethod
-    def create(provider: Optional[str] = None, model: Optional[str] = None,
-               api_key: Optional[str] = None, base_url: Optional[str] = None) -> BaseLLM:
+    def create(provider: str | None = None, model: str | None = None,
+               api_key: str | None = None, base_url: str | None = None) -> BaseLLM:
         """创建指定提供商的 LLM 实例。
 
         Args:
-            provider: 提供商名称 (zhipu/qwen/deepseek/custom/ollama/lmstudio)
+            provider: 提供商名称 (custom:<服务id>/ollama/lmstudio)
             model: 模型名，留空用默认；本地服务空模型会自动发现
             api_key: 临时覆盖 API Key（前端刚填写、尚未保存时用于测试连接）
             base_url: 临时覆盖 Base URL
@@ -91,15 +90,13 @@ class LLMFactory:
             "service_id": "legacy", "custom": True,
         } if legacy_custom else get_provider_config(provider))
         is_local = config.get("local", False)
-        # model=None/"" 时：云端用默认模型，本地空串则触发自动发现
+        # model=None/"" 时：自定义服务用默认模型，本地空串则触发自动发现
         if model:
             chosen_model = model
         elif is_local and provider == "lmstudio":
             chosen_model = settings.LMSTUDIO_MODEL  # 空串 = 自动发现
         elif is_local and provider == "ollama":
             chosen_model = settings.OLLAMA_MODEL
-        elif config.get("custom"):
-            chosen_model = config["default_model"]
         else:
             chosen_model = config["default_model"]
 
@@ -135,10 +132,8 @@ class LLMFactory:
             )
             effective_key = override_key or ("ollama" if provider == "ollama" else "lm-studio")
         else:
-            effective_url = normalize_base_url(
-                override_url or getattr(settings, config["env_base_url"]) or config["base_url"]
-            )
-            effective_key = override_key or getattr(settings, config["env_key"]) or "local"
+            # 内置提供商只剩本地服务；云端一律走上面的自定义服务分支
+            raise ValueError(f"不支持的提供商类型: {provider}")
 
         key = (provider, chosen_model)
         cacheable = bool(chosen_model) and not config.get("custom") and not (override_key or override_url)
@@ -218,8 +213,8 @@ class LLMFactory:
         return _filter(models)
 
     @staticmethod
-    def health_check(provider: str, model: Optional[str] = None,
-                     api_key: Optional[str] = None, base_url: Optional[str] = None) -> dict:
+    def health_check(provider: str, model: str | None = None,
+                     api_key: str | None = None, base_url: str | None = None) -> dict:
         """对指定提供商做详细健康检查（支持临时 Key/URL，供前端测试连接）。"""
         try:
             llm = LLMFactory.create(provider, model or None, api_key=api_key, base_url=base_url)

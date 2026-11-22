@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """论文工作台 API：上传校验 → 需求确认 → 诊断 → 相似 → 改写 → 导出。"""
 import io
 import json
@@ -8,11 +7,11 @@ import time
 from urllib.parse import unquote
 
 import pytest
-
-import server
-import api.paper as api_paper
-from config.settings import settings
 from fastapi.testclient import TestClient
+
+import api.paper as api_paper
+import server
+from config.settings import settings
 from llm.base import ChatResponse
 from paper import store
 from paper.rewrite import MAX_PARAGRAPH_CHARS, rewrite_paragraph
@@ -27,8 +26,8 @@ SAMPLE_LINES = [
     "Deep Learning for Software Testing",
     "",
     "Abstract",
-    "This paper reviews deep learning methods for software testing. "
-    "We summarize fifty studies and compare datasets and metrics.",
+    ("This paper reviews deep learning methods for software testing. "
+     "We summarize fifty studies and compare datasets and metrics."),
     "Keywords: deep learning, software testing, survey",
     "",
     "1 Introduction",
@@ -428,8 +427,8 @@ def test_diagnose_end_to_end_and_stale(env, tmp_path):
 
 
 def test_model_scored_dimensions_use_deterministic_temperature(env, tmp_path):
-    from paper.analysis import _diagnose_feasibility, _diagnose_level
     from llm.gateway import LLMGateway
+    from paper.analysis import _diagnose_feasibility, _diagnose_level
 
     parsed = {"title": "Testing Paper", "paragraphs": [], "sections": []}
     requirement = {"level": "undergraduate"}

@@ -1,10 +1,9 @@
-# -*- coding: utf-8 -*-
 """UI 偏好持久化测试。"""
 import json
 
 import pytest
 
-import utils.prefs as prefs
+from utils import prefs
 
 
 @pytest.fixture(autouse=True)

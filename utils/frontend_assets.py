@@ -88,7 +88,7 @@ def _check_js(web_dir: str, names: list[str]) -> str:
             continue
         result = subprocess.run(
             [node, "--check", os.path.join(web_dir, name)],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         if result.returncode != 0:
             detail = (result.stderr or result.stdout).strip()[:600]

@@ -1,10 +1,9 @@
 """统一日志，控制台彩色输出。"""
 import logging
 import sys
-from typing import Optional
 
 
-def get_logger(name: str = "research_assistant", level: Optional[str] = None) -> logging.Logger:
+def get_logger(name: str = "research_assistant", level: str | None = None) -> logging.Logger:
     """获取统一配置的 logger。"""
     logger = logging.getLogger(name)
     if logger.handlers:

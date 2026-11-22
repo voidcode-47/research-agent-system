@@ -1,12 +1,10 @@
-# -*- coding: utf-8 -*-
 """Markdown → Word 轻量转换器。
 
 支持研究报告常用的语法子集：标题(#/##/###)、无序列表(-)、引用(>)、
 分隔线(---)、粗体(**text**)、行内链接([text](url))。其余内容按段落保留原文。
 """
-from io import BytesIO
-
 import re
+from io import BytesIO
 
 _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _BOLD_RE = re.compile(r"\*\*([^*]+)\*\*")

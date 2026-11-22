@@ -3,7 +3,7 @@
 定义统一接口，用注册表模式自动发现可用工具。
 """
 from abc import ABC, abstractmethod
-from typing import Optional
+from typing import ClassVar
 
 from utils.logger import get_logger
 
@@ -15,7 +15,7 @@ class BaseTool(ABC):
 
     name: str = ""
     description: str = ""
-    parameters: dict = {"type": "object", "properties": {}}
+    parameters: ClassVar[dict] = {"type": "object", "properties": {}}
 
     @abstractmethod
     def execute(self, **kwargs) -> str:
@@ -54,7 +54,7 @@ def register_tool(tool: BaseTool) -> BaseTool:
     return tool
 
 
-def get_tool(name: str) -> Optional[BaseTool]:
+def get_tool(name: str) -> BaseTool | None:
     """获取工具。"""
     return TOOL_REGISTRY.get(name)
 

@@ -5,13 +5,12 @@ import threading
 
 import pytest
 
-from llm.base import ChatResponse
-from paper import analysis, similar
-from paper.rewrite import rewrite_paragraph
 from api import paper as api_paper
-from paper import store
+from llm.base import ChatResponse
+from paper import analysis, similar, store
+from paper.rewrite import rewrite_paragraph
+from tests.test_paper_api import _confirm, _upload_ok, env
 from utils import quota
-from tests.test_paper_api import env, _upload_ok, _confirm
 
 
 def test_diagnosis_overlaps_independent_dimensions_and_copies_context(env, tmp_path, monkeypatch):

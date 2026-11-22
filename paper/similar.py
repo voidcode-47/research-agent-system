@@ -4,10 +4,10 @@
 结果缓存 7 天；网络失败返回空列表 + error，不抛 500。
 """
 import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import re
 import hashlib
 import json
+import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from tools.academic_search import AcademicSearchTool
 from utils.logger import get_logger

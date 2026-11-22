@@ -14,6 +14,7 @@
 问题的文献调研；如需全文可在结果链接处访问（知网/万方部分需机构权限）。
 """
 import re
+from typing import ClassVar
 
 from tools.base import BaseTool, register_tool
 from utils.logger import get_logger
@@ -76,7 +77,7 @@ class AcademicSearchTool(BaseTool):
         "两者均免费、无需 Key。适合研究性问题的文献调研。"
         "优先选择与主题相关的期刊论文，书籍、教程类文献优先级低。"
     )
-    parameters = {
+    parameters: ClassVar[dict] = {
         "type": "object",
         "properties": {
             "query": {

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """论文列表搜索、分页与索引维护。"""
 import pytest
 from fastapi.testclient import TestClient
