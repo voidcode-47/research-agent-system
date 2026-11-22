@@ -5,13 +5,20 @@
   const key = "paper-studio-appearance";
   const themes = new Set(["paper", "ink", "mist", "iris"]);
   const root = document.documentElement;
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+  const environments = {
+    paper: { effect: "leaves", particle: "leaf", count: 26, label: "飘叶" },
+    ink: { effect: "stars", particle: "star", count: 36, label: "流星" },
+    mist: { effect: "rain", particle: "drop", count: 54, label: "细雨" },
+    iris: { effect: "petals", particle: "petal", count: 32, label: "落花" },
+  };
 
   function parse(value) {
     let saved;
     try { saved = JSON.parse(value); } catch (_) { /* Use defaults for corrupt preferences. */ }
     return {
       theme: themes.has(saved?.theme) ? saved.theme : "paper",
-      motion: typeof saved?.motion === "boolean" ? saved.motion : true,
+      motion: typeof saved?.motion === "boolean" ? saved.motion : !reducedMotion?.matches,
     };
   }
 
@@ -32,8 +39,42 @@
       button.setAttribute("aria-checked", String(preference.motion));
     });
     document.querySelectorAll("[data-motion-label]").forEach(label => {
-      label.textContent = preference.motion ? "动态开启" : "保持静止";
+      label.textContent = preference.motion ? `${environments[preference.theme].label} · 开启` : "保持静止";
     });
+    renderAtmosphere();
+  }
+
+  function renderAtmosphere() {
+    const layer = document.getElementById("theme-atmosphere");
+    if (!layer || layer.getAttribute("data-theme") === preference.theme) return;
+    const environment = environments[preference.theme];
+    const particles = [];
+    for (let i = 0; i < environment.count; i++) {
+      const rain = environment.particle === "drop";
+      const star = environment.particle === "star";
+      const duration = rain ? 1.15 + (i % 10) / 10 : star ? 3 + i % 6 : 15 + i * 5 % 13;
+      // Negative delays distribute particles through the viewport on the first frame.
+      const phase = -(i + .5) * duration / environment.count;
+      const x = (7.21 + i * 37.73) % 100;
+      const y = (3.67 + i * 23.47) % 97;
+      const size = star ? 2 + i % 3 : rain ? 20 + i % 8 * 3 : 12 + i % 6 * 2;
+      const drift = rain ? -140 : (i % 2 ? 1 : -1) * (40 + i * 13 % 140);
+      particles.push(`<i class="weather-particle weather-${environment.particle}" style="--x:${x.toFixed(2)}%;--y:${y.toFixed(2)}%;--size:${size}px;--fall:${duration}s;--phase:${phase.toFixed(2)}s;--drift:${drift}px;--turn:${i * 47 % 360}deg;--sway-cycle:${5 + i % 4}s"><span class="weather-shape"></span></i>`);
+    }
+    if (environment.effect === "stars") {
+      for (let i = 0; i < 5; i++) {
+        particles.push(`<i class="weather-particle weather-meteor" style="--x:${65 + i * 7}%;--y:${8 + i * 14}%;--fall:${8 + i}s;--phase:-${i * 2.3 + .7}s"><span class="weather-shape"></span></i>`);
+      }
+    }
+    if (environment.effect === "rain") {
+      for (let i = 0; i < 6; i++) {
+        particles.push(`<i class="weather-particle weather-ripple" style="--x:${8 + i * 17}%;--y:${74 + i * 4}%;--fall:${4 + i % 3}s;--phase:-${i * .8}s"><span class="weather-shape"></span></i>`);
+      }
+    }
+    layer.setAttribute("data-theme", preference.theme);
+    layer.setAttribute("data-effect", environment.effect);
+    // Only fixed markup and generated numbers are inserted; no user text enters this layer.
+    layer.innerHTML = particles.join("");
   }
 
   function save() {

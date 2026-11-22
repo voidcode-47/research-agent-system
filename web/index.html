@@ -4,11 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
-<script src="/appearance.js?v=0198a342e572"></script>
+<script src="/appearance.js?v=c57d0fffabc2"></script>
 <link rel="stylesheet" href="/style.css?v=ccbf5d8b297d">
-<link rel="stylesheet" href="/appearance.css?v=68ffca1f1a23">
+<link rel="stylesheet" href="/appearance.css?v=e8066d0e1729">
 </head>
 <body>
+<div id="theme-atmosphere" class="theme-atmosphere" aria-hidden="true"></div>
 <div class="layout">
   <!-- ======================= 侧边栏 ======================= -->
   <aside class="sidebar">
@@ -49,10 +50,10 @@
     <div class="sidebar-appearance">
       <div class="appearance-head"><span>工作台外观</span><span>随心切换</span></div>
       <div class="theme-dots" role="group" aria-label="快速切换主题">
-        <button type="button" class="theme-dot choice-paper" data-theme-choice="paper" aria-label="纸白主题" title="纸白 · 自然纸感" aria-pressed="true"></button>
-        <button type="button" class="theme-dot choice-ink" data-theme-choice="ink" aria-label="月墨主题" title="月墨 · 石墨与香槟" aria-pressed="false"></button>
-        <button type="button" class="theme-dot choice-mist" data-theme-choice="mist" aria-label="雾蓝主题" title="雾蓝 · 清晰而理性" aria-pressed="false"></button>
-        <button type="button" class="theme-dot choice-iris" data-theme-choice="iris" aria-label="鸢尾主题" title="鸢尾 · 柔和的灵感" aria-pressed="false"></button>
+        <button type="button" class="theme-dot choice-paper" data-theme-choice="paper" aria-label="纸白主题" title="纸白 · 绿叶轻落" aria-pressed="true"></button>
+        <button type="button" class="theme-dot choice-ink" data-theme-choice="ink" aria-label="月墨主题" title="月墨 · 星光与流星" aria-pressed="false"></button>
+        <button type="button" class="theme-dot choice-mist" data-theme-choice="mist" aria-label="雾蓝主题" title="雾蓝 · 细雨与涟漪" aria-pressed="false"></button>
+        <button type="button" class="theme-dot choice-iris" data-theme-choice="iris" aria-label="鸢尾主题" title="鸢尾 · 花瓣飘落" aria-pressed="false"></button>
       </div>
       <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="界面动画" data-motion-toggle>
         <span data-motion-label>动态开启</span><span class="toggle-track" aria-hidden="true"></span>
@@ -613,24 +614,24 @@
         <div class="theme-gallery" role="group" aria-label="选择工作台主题">
           <button type="button" class="theme-choice choice-paper" data-theme-choice="paper" aria-pressed="true">
             <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
-            <span class="choice-label">纸白 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">自然纸感，沉静的绿</span>
+            <span class="choice-label">纸白 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">自然纸感，绿叶轻落</span>
           </button>
           <button type="button" class="theme-choice choice-ink" data-theme-choice="ink" aria-pressed="false">
             <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
-            <span class="choice-label">月墨 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">深邃石墨，香槟微光</span>
+            <span class="choice-label">月墨 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">深邃石墨，星光与流星</span>
           </button>
           <button type="button" class="theme-choice choice-mist" data-theme-choice="mist" aria-pressed="false">
             <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
-            <span class="choice-label">雾蓝 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">清透蓝灰，理性的秩序</span>
+            <span class="choice-label">雾蓝 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">清透蓝灰，细雨与涟漪</span>
           </button>
           <button type="button" class="theme-choice choice-iris" data-theme-choice="iris" aria-pressed="false">
             <span class="theme-preview" aria-hidden="true"><span class="preview-sidebar"></span><span class="preview-page"><i class="preview-banner"></i><i class="preview-lines"></i></span></span>
-            <span class="choice-label">鸢尾 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">柔和紫雾，舒展的灵感</span>
+            <span class="choice-label">鸢尾 <span class="theme-check" aria-hidden="true">✓</span></span><span class="choice-note">柔和紫雾，花瓣飘落</span>
           </button>
         </div>
         <div class="appearance-footer">
-          <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="持续动画" data-motion-toggle><span class="toggle-track" aria-hidden="true"></span><span>页面持续动画</span><span data-motion-label>动态开启</span></button>
-          <p class="muted">纸页、引用网络与轨道缓慢循环。<span class="motion-system-note">系统已启用减少动态效果，动画保持静止。</span></p>
+          <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="持续动画" data-motion-toggle><span class="toggle-track" aria-hidden="true"></span><span>主题环境动画</span><span data-motion-label>动态开启</span></button>
+          <p class="muted">飘叶、流星、细雨与落花随主题切换。<span class="motion-system-note">系统默认减少动态效果，可手动开启。</span></p>
         </div>
       </div>
 
