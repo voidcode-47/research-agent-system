@@ -421,31 +421,51 @@ body { font-family: var(--font-ui); }
   33%, 100% { opacity: 0; transform: translate3d(-72vw, 60vh, 0); }
 }
 .weather-drop {
-  --weather-animation: rain-fall var(--fall) linear var(--phase) infinite;
+  --travel: calc(100dvh + 200px);
+  border-radius: 48% 52% 46% 54% / 62% 64% 36% 38%;
+  backdrop-filter: blur(1px) contrast(1.12) brightness(1.06);
+  --weather-animation: glass-slide var(--fall) linear var(--phase) infinite;
+}
+.weather-drop::before {
+  content: ""; position: absolute; left: 44%; bottom: calc(var(--size) * .6);
+  width: calc(var(--size) * .16); height: calc(var(--size) * 3.2);
+  border-radius: 50% 50% 35% 35%;
+  background: linear-gradient(180deg, transparent, #b5d5ec14 35%, #eaf7ff57 80%, #83b0d13d);
+  box-shadow: 1px 0 2px #417d9c14;
 }
 .weather-drop .weather-shape {
-  width: 2.2px; height: var(--size); border-radius: 2px; transform: rotate(9deg);
-  background: linear-gradient(180deg, transparent, #5589b7 55%, #346e9f);
-  box-shadow: 0 0 3px #5589b740;
+  width: var(--size); height: calc(var(--size) * 1.4);
+  border: 1px solid; border-color: #ffffffcc #578fb080 #386e988c #d2edffc2;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 28% 20%, #ffffffed, #ffffff80 7%, transparent 26%),
+    radial-gradient(ellipse at 72% 77%, #3b6d9452, transparent 40%),
+    linear-gradient(135deg, #e5f4ff66, #ffffff30 36%, #719fc23d 66%, #ffffff80);
+  box-shadow: inset -3px -5px 8px #41789b59, inset 3px 3px 6px #ffffffb3, 1px 3px 8px #20507833;
+  transform-origin: center bottom;
+  --weather-animation: droplet-stretch var(--fall) ease-in-out var(--phase) infinite;
 }
-.weather-drop:nth-child(4n) .weather-shape { width: 3.3px; }
-.weather-ripple {
-  top: var(--y);
-  --weather-animation: rain-ripple var(--fall) ease-out var(--phase) infinite;
+.weather-drop .weather-shape::before {
+  content: ""; position: absolute; left: 17%; top: 14%; width: 15%; height: 32%;
+  border-radius: 50%; transform: rotate(20deg);
+  background: linear-gradient(#fffffff2, #ffffff40);
 }
-.weather-ripple .weather-shape {
-  width: 94px; height: 29px; border: 1.8px solid #568bb9; border-radius: 50%;
-  box-shadow: 0 0 5px #7da3c526, inset 0 0 5px #7da3c526;
+.weather-drop .weather-shape::after {
+  content: ""; position: absolute; left: 22%; bottom: 10%; width: 56%; height: 12%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, #ffffffb3, transparent 72%);
 }
-@keyframes rain-fall {
+@keyframes glass-slide {
   0% { transform: translate3d(0, -30px, 0); opacity: 0; }
-  6%, 92% { opacity: var(--alpha, .76); }
-  100% { transform: translate3d(var(--drift), calc(100dvh + 200px), 0); opacity: 0; }
+  6%, 92% { opacity: var(--alpha, .86); }
+  18%, 26% { transform: translate3d(calc(var(--drift) * .16), calc(var(--travel) * .12), 0); }
+  50%, 58% { transform: translate3d(calc(var(--drift) * .52), calc(var(--travel) * .52), 0); }
+  86% { transform: translate3d(calc(var(--drift) * .84), calc(var(--travel) * .84), 0); }
+  100% { transform: translate3d(var(--drift), var(--travel), 0); opacity: 0; }
 }
-@keyframes rain-ripple {
-  0% { transform: translateX(-50%) scale(.15); opacity: 0; }
-  15% { opacity: .64; }
-  70%, 100% { transform: translateX(-50%) scale(1.8); opacity: 0; }
+@keyframes droplet-stretch {
+  0%, 18%, 26%, 50%, 58%, 100% { transform: rotate(-2deg) scale(1); }
+  40%, 78% { transform: rotate(2deg) scale(.92, 1.12); }
 }
 :root[data-motion="off"] .theme-atmosphere { display: none; }
 

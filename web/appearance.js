@@ -9,7 +9,7 @@
   const environments = {
     paper: { effect: "leaves", particle: "leaf", count: 28, label: "飘叶" },
     ink: { effect: "stars", particle: "star", count: 44, label: "流星" },
-    mist: { effect: "rain", particle: "drop", count: 60, label: "细雨" },
+    mist: { effect: "rain", particle: "drop", count: 12, label: "玻璃水滴" },
     iris: { effect: "petals", particle: "petal", count: 36, label: "落花" },
   };
 
@@ -53,14 +53,14 @@
       const rain = environment.particle === "drop";
       const star = environment.particle === "star";
       const depth = i % 3;
-      const duration = rain ? .95 + (i % 9) / 10 : star ? 3 + i % 5 : 9 + i * 7 % 10;
+      const duration = rain ? 18 + i * 7 % 10 : star ? 3 + i % 5 : 9 + i * 7 % 10;
       // Negative delays distribute particles through the viewport on the first frame.
       const phase = -(i + .5) * duration / environment.count;
       const x = (7.21 + i * 37.73) % 100;
       const y = (3.67 + i * 23.47) % 97;
-      const size = star ? 4 + i % 5 : rain ? 44 + i % 8 * 7 : 26 + depth * 10 + i % 4 * 2;
-      const alpha = rain ? .5 + depth * .16 : .6 + depth * .16;
-      const drift = rain ? -170 : (i % 2 ? 1 : -1) * (70 + i * 13 % 160);
+      const size = star ? 4 + i % 5 : rain ? 28 + depth * 8 + i % 4 * 3 : 26 + depth * 10 + i % 4 * 2;
+      const alpha = rain ? .72 + depth * .1 : .6 + depth * .16;
+      const drift = (i % 2 ? 1 : -1) * (rain ? 8 + i % 5 * 4 : 70 + i * 13 % 160);
       particles.push(`<i class="weather-particle weather-${environment.particle}" style="--x:${x.toFixed(2)}%;--y:${y.toFixed(2)}%;--size:${size}px;--alpha:${alpha.toFixed(2)};--fall:${duration}s;--phase:${phase.toFixed(2)}s;--drift:${drift}px;--turn:${i * 47 % 360}deg;--sway-cycle:${4 + i % 4}s"><span class="weather-shape"></span></i>`);
     }
     if (environment.effect === "stars") {
@@ -68,11 +68,6 @@
         const duration = 5.5 + i * .5;
         const phase = -(i + .5) * duration / 5;
         particles.push(`<i class="weather-particle weather-meteor" style="--x:${52 + i * 10}%;--y:${5 + i * 18}%;--fall:${duration}s;--phase:${phase.toFixed(2)}s"><span class="weather-shape"></span></i>`);
-      }
-    }
-    if (environment.effect === "rain") {
-      for (let i = 0; i < 6; i++) {
-        particles.push(`<i class="weather-particle weather-ripple" style="--x:${8 + i * 17}%;--y:${70 + i * 4}%;--fall:${3 + i % 3}s;--phase:-${i * .6}s"><span class="weather-shape"></span></i>`);
       }
     }
     layer.setAttribute("data-theme", preference.theme);
