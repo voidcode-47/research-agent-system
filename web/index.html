@@ -4,9 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>论文诊断与优化工作台</title>
+<link rel="icon" href="data:,">
 <script src="/appearance.js?v=4a052ec7cfd6"></script>
 <link rel="stylesheet" href="/style.css?v=48133879a536">
 <link rel="stylesheet" href="/appearance.css?v=7c5b5eadecb9">
+<link rel="stylesheet" href="/pet.css?v=a07d62172576">
 </head>
 <body>
 <div id="theme-atmosphere" class="theme-atmosphere" aria-hidden="true"></div>
@@ -57,6 +59,12 @@
       </div>
       <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="界面动画" data-motion-toggle>
         <span data-motion-label>动态开启</span><span class="toggle-track" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="motion-toggle pet-toggle" role="switch" aria-checked="true" aria-label="显示桌宠" data-pet-toggle>
+        <span>桌宠</span><span data-pet-show-label>显示中</span><span class="toggle-track" aria-hidden="true"></span>
+      </button>
+      <button type="button" class="motion-toggle pet-toggle" role="switch" aria-checked="true" aria-label="桌宠音效" data-pet-sound>
+        <span>桌宠音效</span><span data-pet-sound-label>音效开</span><span class="toggle-track" aria-hidden="true"></span>
       </button>
     </div>
 
@@ -631,6 +639,19 @@
         </div>
         <div class="appearance-footer">
           <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="持续动画" data-motion-toggle><span class="toggle-track" aria-hidden="true"></span><span>主题环境动画</span><span data-motion-label>动态开启</span></button>
+          <div class="pet-gallery-wrap">
+            <div class="pet-gallery-title">桌宠形象</div>
+            <div class="pet-gallery" id="pet-gallery" role="radiogroup" aria-label="切换桌宠形象"></div>
+          </div>
+          <div class="pet-settings-row">
+            <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="显示桌宠" data-pet-toggle><span class="toggle-track" aria-hidden="true"></span><span>桌宠</span><span data-pet-show-label>显示中</span></button>
+            <button type="button" class="motion-toggle" role="switch" aria-checked="true" aria-label="桌宠音效" data-pet-sound><span class="toggle-track" aria-hidden="true"></span><span>桌宠音效</span><span data-pet-sound-label>音效开</span></button>
+            <label class="pet-size-control" title="也可以把鼠标放在宠物身上滚动滚轮缩放">
+              <span>体型</span>
+              <input type="range" id="pet-size" min="60" max="200" step="5" value="100" aria-label="桌宠体型百分比">
+              <span data-pet-size-label>100%</span>
+            </label>
+          </div>
           <p class="muted">飘叶、流星、玻璃水滴与落花随主题切换。<span class="motion-system-note">系统默认减少动态效果，可手动开启。</span></p>
         </div>
       </div>
@@ -805,7 +826,8 @@
   <article id="report-preview-body" class="markdown"></article>
 </dialog>
 
-<script src="/app.js?v=019cb48d7dc6"></script>
-<script src="/paper.js?v=12e60cbfc29e"></script>
+<script src="/app.js?v=7f3872f7171e"></script>
+<script src="/paper.js?v=e993d241b2f1"></script>
+<script src="/pet.js?v=b4214854a09b"></script>
 </body>
 </html>

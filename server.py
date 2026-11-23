@@ -362,7 +362,7 @@ def api_models(provider: str):
     try:
         models = LLMFactory.get_models(provider)
         return {"models": models, "provider": provider}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — API 边界兜底：任何上游错误都转为可响应错误
         return {"models": [], "provider": provider, "error": str(e)}
 
 
@@ -497,7 +497,7 @@ def _search_references(topic: str, limit: int) -> tuple[list[dict], dict, list[s
     def _run(name, search):
         try:
             return name, search(topic, per_source) or [], ""
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — 单源检索失败不拖垮整体，已记录日志
             logger.warning(f"文献检索失败 {name} {topic}: {e}")
             return name, [], f"{name} 检索失败"
 
@@ -794,7 +794,7 @@ def api_research_followup(req: FollowupRequest):
     model = prefs.get("model") or None
     try:
         llm = LLMFactory.create(provider, model)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — 模型工厂错误统一转 400 响应
         raise HTTPException(400, f"模型初始化失败: {e}")
 
     messages = [
@@ -865,7 +865,7 @@ def _followup_worker(task_id: str, paper_id: str, llm, messages: list[dict], out
                 return
         if paper_api._finish(task, "done", cancel_wins=True):
             send({"type": "done"})
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — 流式边界兜底：异常必须落库为任务失败
         paper_api._fail(task, exc, cancel_wins=True)
         send({"type": "error", "text": f"追问失败: {exc}"})
     finally:
@@ -933,7 +933,7 @@ def api_get_report(name: str, format: str = "md"):
                 media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 headers={"Content-Disposition": f"attachment; filename*=UTF-8''{download_name}"},
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 — 导出边界兜底：转换失败转 500 响应
             raise HTTPException(500, f"Word 导出失败: {e}")
     return FileResponse(fpath, media_type="text/markdown",
                         filename=name)
@@ -1003,7 +1003,7 @@ if __name__ == "__main__":
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.3)
                 return s.connect_ex(("127.0.0.1", port)) == 0
-        except Exception:
+        except OSError:
             return False
 
     # 启动前检查端口：已被占用说明旧实例还在运行，不再重复启动
@@ -1012,8 +1012,8 @@ if __name__ == "__main__":
         try:
             webbrowser.open("http://localhost:8501")
             print("        已打开浏览器访问现有实例，按 Enter 关闭本窗口。")
-        except Exception:
-            pass
+        except (OSError, webbrowser.Error) as exc:
+            print(f"        浏览器打开失败（可手动访问）: {exc}")
         try:
             input()
         except (KeyboardInterrupt, EOFError):
@@ -1037,8 +1037,8 @@ if __name__ == "__main__":
     if ready:
         try:
             webbrowser.open("http://localhost:8501")
-        except Exception:
-            pass
+        except (OSError, webbrowser.Error) as exc:
+            print(f"  浏览器打开失败（可手动访问）: {exc}")
         print("  服务已就绪，浏览器已打开 http://localhost:8501")
     else:
         print("[错误] 服务启动超时，请检查上方日志。")

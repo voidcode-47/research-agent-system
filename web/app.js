@@ -281,6 +281,10 @@ function setResearchRunning(running) {
   $("btn-research").disabled = running;
   $("btn-research-cancel").classList.toggle("hidden", !running);
   $("btn-research-cancel").disabled = false;
+  if (window.NaiwaPet) {
+    if (running) window.NaiwaPet.taskStart("research");
+    else window.NaiwaPet.taskEnd("research");
+  }
 }
 
 function setResearchProgress(progress, stage, isError) {
@@ -311,6 +315,10 @@ function applyResearchTask(t) {
   renderResearchRefs(t.references || []);
   $("research-logs").innerHTML = "";
   for (const l of t.logs || []) logLine(l);
+  if (window.NaiwaPet) {
+    if (done) window.NaiwaPet.opEnd("research", true);
+    else if (failed) window.NaiwaPet.opEnd("research", false);
+  }
   return { cancelled, failed, done };
 }
 

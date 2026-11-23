@@ -166,6 +166,17 @@ function pwClearTimers() {
 // 任务状态优先走 SSE；不支持或连接失败时回退到单次状态查询轮询。
 function pwWatchTask(paperId, taskId, opts) {
   const terminal = new Set(["done", "error", "cancelled"]);
+  // 桌宠联动：按任务 URL 识别种类，结束统一在 stop() 里清理
+  const petKind = opts.petKind || (/\/rewrite\/guideline\//.test(opts.statusUrl) ? "guideline"
+    : /\/rewrite\//.test(opts.statusUrl) ? "rewrite"
+    : /\/diagnose\//.test(opts.statusUrl) ? "diagnose"
+    : /\/similar\//.test(opts.statusUrl) ? "similar"
+    : /\/upload\//.test(opts.statusUrl) ? "upload" : "");
+  const petDone = (status) => {
+    if (!window.NaiwaPet || !petKind) return;
+    if (status === "done") window.NaiwaPet.opEnd(petKind, true);
+    else if (status === "error") window.NaiwaPet.opEnd(petKind, false);
+  };
   const interval = opts.interval || 1200;
   let stopped = false;
   let fallbackStarted = false;
@@ -176,6 +187,7 @@ function pwWatchTask(paperId, taskId, opts) {
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    if (petKind && window.NaiwaPet) window.NaiwaPet.taskEnd(petKind);
     if (timer) {
       clearTimeout(timer);
       timer = null;
@@ -192,6 +204,7 @@ function pwWatchTask(paperId, taskId, opts) {
     if (stopped) return;
     if (opts.isCurrent && !opts.isCurrent()) { stop(); return; }
     const isTerminal = terminal.has(view.status);
+    if (isTerminal) petDone(view.status);
     chain = chain
       .then(() => opts.onView(view))
       .catch((e) => {
@@ -208,6 +221,7 @@ function pwWatchTask(paperId, taskId, opts) {
     fallbackStarted = true;
     stop();
     stopped = false;
+    if (petKind && window.NaiwaPet) window.NaiwaPet.taskStart(petKind);
     poll();
   };
 
@@ -219,6 +233,7 @@ function pwWatchTask(paperId, taskId, opts) {
       if (opts.isCurrent && !opts.isCurrent()) { stop(); return; }
       chain = chain.then(() => opts.onView(view));
       const isTerminal = terminal.has(view.status);
+      if (isTerminal) petDone(view.status);
       await chain;
       if (isTerminal) { stop(); return; }
       if (!stopped) {
@@ -231,6 +246,7 @@ function pwWatchTask(paperId, taskId, opts) {
     }
   };
 
+  if (petKind && paperId && taskId && window.NaiwaPet) window.NaiwaPet.taskStart(petKind);
   if (!paperId || !taskId || typeof window.EventSource !== "function") {
     poll();
     return;
@@ -1836,6 +1852,7 @@ function pwPollBatch(taskId) {
   const pid = paperState.paperId;
   pwWatchTask(pid, taskId, {
     statusUrl: `/api/paper/${encodeURIComponent(pid)}/rewrite/${taskId}`,
+    petKind: "batch",
     interval: 1200,
     timerKey: "batchTimer",
     isCurrent: () => paperState.paperId === pid,
@@ -2436,6 +2453,7 @@ async function pwAdopt() {
     pwRenderBatchResults();
     pwSetStep(5, true);
     pwAlert(`已采纳并保存为 v${res.version}。如需回退，可删除后重新上传，或继续逐段优化。`, "ok");
+    if (window.NaiwaPet) window.NaiwaPet.react("wave");
   } catch (e) {
     if (!current()) return;
     if (e && e.status === 409) {
@@ -2505,6 +2523,7 @@ async function pwAdoptBatch() {
     pwRenderBatchResults();
     pwSetStep(5, true);
     pwAlert(`已批量采纳 ${adopted.size} 段，保存为 v${res.version}。`, "ok", 5);
+    if (window.NaiwaPet) window.NaiwaPet.react("wave");
   } catch (e) {
     if (!current()) return;
     if (e && e.status === 409) {
@@ -2541,10 +2560,11 @@ function pwExportFilename(resp, format, fallbackName) {
 
 async function pwTrackedFormatMode() {
   // 原文是 docx 时优先在原文件上写修订；字体不符合论文规范时先询问用户
+  if (window.NaiwaPet) window.NaiwaPet.opStart("format");
   try {
     const check = await api(`/api/paper/${encodeURIComponent(paperState.paperId)}/format-check`);
-    if (!check || !check.has_original_docx) return "auto";
-    if (check.compliant) return "original";
+    if (!check || !check.has_original_docx) { if (window.NaiwaPet) window.NaiwaPet.opEnd("format", true); return "auto"; }
+    if (check.compliant) { if (window.NaiwaPet) window.NaiwaPet.opEnd("format", true); return "original"; }
     const issues = (check.issues || []).map((x) => "· " + x).join("\n");
     const req = check.required || {};
     const spec = [
@@ -2559,14 +2579,17 @@ async function pwTrackedFormatMode() {
       `原文格式与论文规范不一致：\n${issues}\n\n规范：${spec}\n\n` +
       "点击“确定”按论文格式调整后再导出；点击“取消”完全保留原文格式导出。"
     );
+    if (window.NaiwaPet) window.NaiwaPet.opEnd("format", true);
     return adjust ? "thesis" : "original";
   } catch (e) {
+    if (window.NaiwaPet) window.NaiwaPet.opEnd("format", false);
     return "auto";
   }
 }
 
 async function pwExport(format = "docx", tracked = false) {
   if (!paperState.paperId) { pwAlert("请先上传论文", "warn"); return; }
+  if (window.NaiwaPet) window.NaiwaPet.opStart("export");
   try {
     const mode = tracked ? await pwTrackedFormatMode() : "";
     const query = `format=${format}`
@@ -2586,6 +2609,7 @@ async function pwExport(format = "docx", tracked = false) {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+    if (window.NaiwaPet) window.NaiwaPet.opEnd("export", true);
     if (tracked) {
       pwAlert(
         mode === "thesis"
@@ -2597,6 +2621,7 @@ async function pwExport(format = "docx", tracked = false) {
       pwAlert("《论文修改说明》已导出，可直接随修改稿一起提交。", "ok", 5);
     }
   } catch (e) {
+    if (window.NaiwaPet) window.NaiwaPet.opEnd("export", false);
     pwAlert("导出失败：" + e.message, "err");
   }
 }
@@ -2610,6 +2635,7 @@ function pwPaperStem() {
 
 async function pwBackup() {
   if (!paperState.paperId) { pwAlert("请先上传或选择论文", "warn"); return; }
+  if (window.NaiwaPet) window.NaiwaPet.opStart("backup");
   try {
     const resp = await fetch(`/api/paper/${encodeURIComponent(paperState.paperId)}/backup`);
     if (!resp.ok) {
@@ -2626,8 +2652,10 @@ async function pwBackup() {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+    if (window.NaiwaPet) window.NaiwaPet.opEnd("backup", true);
     pwAlert("备份已下载：包含论文原文、需求、诊断、版本与已归档版本。", "ok", 5);
   } catch (e) {
+    if (window.NaiwaPet) window.NaiwaPet.opEnd("backup", false);
     pwAlert("备份失败：" + e.message, "err");
   }
 }
@@ -2814,6 +2842,8 @@ async function pwAsk() {
   const isCurrent = () => pid === paperState.paperId && seq === paperState.askSeq;
   const btn = $("btn-paper-ask");
   btn.disabled = true;
+  if (window.NaiwaPet) window.NaiwaPet.opStart("ask");
+  let askOk = false;
   $("paper-ask-answer").classList.remove("hidden");
   $("paper-ask-answer").innerHTML = '<span class="muted">思考中...</span>';
   try {
@@ -2827,11 +2857,15 @@ async function pwAsk() {
       $("paper-ask-input").value = "";
       pwRefreshQuota();
     }
+    askOk = true;
   } catch (e) {
     if (!isCurrent()) return;
     $("paper-ask-answer").innerHTML = `<span class="paper-error">${esc(e.message)}</span>`;
   } finally {
-    if (isCurrent()) btn.disabled = false;
+    if (isCurrent()) {
+      btn.disabled = false;
+      if (window.NaiwaPet) window.NaiwaPet.opEnd("ask", askOk);
+    }
   }
 }
 

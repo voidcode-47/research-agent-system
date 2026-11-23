@@ -1,0 +1,362 @@
+/* =========================================================
+ * 奶蛙桌宠（Naiwa Pet）
+ * 素材：web/assets/naiwa/（第三方二创素材，仅限个人本地使用，见 CREDITS.md）
+ * ========================================================= */
+
+#naiwa-pet {
+  position: fixed;
+  right: 76px;
+  bottom: 20px;
+  z-index: 9999;
+  width: 168px;
+  transform-origin: 0 0;
+  transition: transform .12s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+#naiwa-pet.naiwa-hidden { display: none; }
+
+/* 气泡 */
+.naiwa-bubble {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 8px;
+  max-width: 200px;
+  padding: 6px 10px;
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  color: var(--text-primary, #333);
+  border: 1px solid var(--border, #e5e0d8);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .12);
+  font-size: 12.5px;
+  line-height: 1.45;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity .12s ease, transform .12s ease;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.naiwa-bubble::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  right: 26px;
+  border: 6px solid transparent;
+  border-top-color: var(--surface, #fff);
+}
+.naiwa-bubble.show { opacity: 1; transform: translateY(0); }
+
+/* 舞台：精灵与姿势图共用 */
+.naiwa-stage {
+  position: relative;
+  width: 168px;
+  height: 168px;
+  cursor: grab;
+  transform: translateZ(0);   /* 独立合成层：帧动画重绘不波及整页，消除闪烁 */
+}
+.naiwa-stage:active { cursor: grabbing; }
+
+.naiwa-sprite {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 144px;
+  height: 156px;
+  margin-left: -72px;
+  background-image: url("assets/naiwa/spritesheet.webp");
+  background-repeat: no-repeat;
+  background-size: 1152px 1716px; /* 1536×2288 × 0.75 */
+  image-rendering: auto;
+}
+
+.naiwa-pose {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  display: none;
+  pointer-events: none;
+}
+.naiwa-pose-diagnose { height: 156px; }
+.naiwa-pose-rewrite { height: 112px; }
+
+#naiwa-pet[data-pet="naiwa"][data-mode="sheet"][data-state="diagnose"] .naiwa-sprite,
+#naiwa-pet[data-pet="naiwa"][data-mode="sheet"][data-state="rewrite"] .naiwa-sprite { display: none; }
+#naiwa-pet[data-pet="naiwa"][data-mode="sheet"][data-state="diagnose"] .naiwa-pose-diagnose { display: block; }
+#naiwa-pet[data-pet="naiwa"][data-mode="sheet"][data-state="rewrite"] .naiwa-pose-rewrite { display: block; }
+
+/* 定制姿势的呼吸/晃动动画（节奏加快，避免看起来迟滞） */
+@keyframes naiwa-sway {
+  0%, 100% { transform: translateX(-50%) rotate(-1.8deg); }
+  50%      { transform: translateX(-50%) rotate(1.8deg) translateY(-3px); }
+}
+@keyframes naiwa-bob {
+  0%, 100% { transform: translateX(-50%) translateY(0) rotate(0deg); }
+  35%      { transform: translateX(-50%) translateY(-3px) rotate(-.8deg); }
+  70%      { transform: translateX(-50%) translateY(-1px) rotate(.8deg); }
+}
+#naiwa-pet[data-state="diagnose"] .naiwa-pose-diagnose {
+  animation: naiwa-sway 1.5s ease-in-out infinite;
+  transform-origin: 50% 90%;
+}
+#naiwa-pet[data-state="rewrite"] .naiwa-pose-rewrite {
+  animation: naiwa-bob .7s ease-in-out infinite;
+}
+
+/* 久闲打盹：缓慢呼吸起伏 */
+@keyframes naiwa-breathe {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(.965) translateY(2px); }
+}
+#naiwa-pet[data-state="doze"] .naiwa-stage {
+  animation: naiwa-breathe 3.2s ease-in-out infinite;
+  transform-origin: 50% 100%;
+}
+
+/* 被拖拽时悬空挣扎摆动 */
+@keyframes naiwa-swing {
+  0%, 100% { transform: rotate(-7deg); }
+  50%      { transform: rotate(7deg); }
+}
+#naiwa-pet[data-state="dangle"] .naiwa-stage {
+  animation: naiwa-swing .5s ease-in-out infinite;
+  transform-origin: 50% 15%;
+}
+
+/* 落地缓冲 */
+@keyframes naiwa-land {
+  0%   { transform: scaleY(.86) scaleX(1.08); }
+  60%  { transform: scaleY(1.05) scaleX(.96); }
+  100% { transform: scaleY(1) scaleX(1); }
+}
+#naiwa-pet.naiwa-landing .naiwa-stage {
+  animation: naiwa-land .32s ease-out;
+  transform-origin: 50% 100%;
+}
+
+/* 大笑时整体蹦跳 */
+@keyframes naiwa-jump {
+  0%, 100% { transform: translateY(0); }
+  40%      { transform: translateY(-10px); }
+  60%      { transform: translateY(-6px); }
+}
+#naiwa-pet[data-state="laugh"] .naiwa-stage { animation: naiwa-jump .55s ease-in-out infinite; }
+
+/* 收起后的边缘小徽章 */
+#naiwa-pet-badge {
+  position: fixed;
+  right: 66px;
+  bottom: 14px;
+  z-index: 9999;
+  width: 46px;
+  height: 50px;
+  border-radius: 50%;
+  border: 1px solid var(--border, #e5e0d8);
+  background-color: var(--surface, #fff);
+  background-image: url("assets/naiwa/spritesheet.webp");
+  background-repeat: no-repeat;
+  background-size: 384px 572px; /* 1536×2288 × 0.25 */
+  background-position: -14px -10px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .16);
+  cursor: pointer;
+  display: none;
+}
+#naiwa-pet-badge.show { display: block; }
+
+/* 设置页 / 左侧栏的桌宠开关（复用工作台 motion-toggle 样式） */
+.sidebar-appearance .motion-toggle.pet-toggle { margin-top: 10px; }
+.pet-settings-row { display: flex; gap: 26px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+.pet-settings-row .motion-toggle { font-size: 13px; }
+.pet-size-control { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary, #333); }
+.pet-size-control input[type="range"] { width: 130px; accent-color: var(--accent, #c2502a); cursor: pointer; }
+.pet-size-control [data-pet-size-label] { min-width: 40px; color: var(--text-secondary, #8a8578); font-variant-numeric: tabular-nums; }
+
+/* ---------- 立绘模式（牛来 / 奶龙 / 蓝鲸）：单立绘 + CSS 动作 ---------- */
+#naiwa-pet[data-mode="pose"] .naiwa-sprite {
+  width: 150px;
+  height: 150px;
+  margin-left: -75px;
+  filter: drop-shadow(0 3px 8px rgba(60, 50, 30, .22));
+}
+#naiwa-pet[data-mode="pose"] .naiwa-stage { transform-origin: 50% 100%; }
+
+@keyframes pet-bob {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-3px); }
+}
+@keyframes pet-trot {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50%      { transform: translateY(-6px) rotate(2deg); }
+}
+@keyframes pet-sway {
+  0%, 100% { transform: rotate(-3deg); }
+  50%      { transform: rotate(3deg); }
+}
+@keyframes pet-tilt {
+  0%, 100% { transform: rotate(0deg); }
+  30%      { transform: rotate(-5deg); }
+  70%      { transform: rotate(4deg); }
+}
+@keyframes pet-hop {
+  0%, 100% { transform: translateY(0); }
+  40%      { transform: translateY(-14px); }
+  70%      { transform: translateY(-4px); }
+}
+@keyframes pet-hops {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  35%      { transform: translateY(-16px) scaleY(1.04); }
+  65%      { transform: translateY(-2px) scaleY(.98); }
+}
+@keyframes pet-swaybig {
+  0%, 100% { transform: rotate(-8deg) translateY(0); }
+  50%      { transform: rotate(8deg) translateY(-6px); }
+}
+@keyframes pet-breach {
+  0%   { transform: translateY(0) rotate(0deg); }
+  45%  { transform: translateY(-64px) rotate(-6deg); }
+  70%  { transform: translateY(-40px) rotate(4deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
+@keyframes pet-fly {
+  0%   { transform: translateY(0) rotate(0deg); }
+  30%  { transform: translateY(-46px) rotate(-8deg); }
+  60%  { transform: translateY(-60px) rotate(6deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
+@keyframes pet-dance {
+  0%   { transform: translateY(0) rotate(0deg); }
+  25%  { transform: translateY(-10px) rotate(90deg); }
+  50%  { transform: translateY(-16px) rotate(180deg); }
+  75%  { transform: translateY(-10px) rotate(270deg); }
+  100% { transform: translateY(0) rotate(360deg); }
+}
+
+#naiwa-pet[data-mode="pose"][data-state="idle"] .naiwa-stage { animation: pet-bob 2.2s ease-in-out infinite; }
+#naiwa-pet[data-mode="pose"][data-state="search"] .naiwa-stage,
+#naiwa-pet[data-mode="pose"][data-state="run"] .naiwa-stage,
+#naiwa-pet[data-mode="pose"][data-state="runleft"] .naiwa-stage { animation: pet-trot .4s ease-in-out infinite; }
+#naiwa-pet[data-mode="pose"][data-state="runleft"] .naiwa-sprite { transform: scaleX(-1); }
+#naiwa-pet[data-mode="pose"][data-state="wait"] .naiwa-stage { animation: pet-sway 3s ease-in-out infinite; }
+#naiwa-pet[data-mode="pose"][data-state="think"] .naiwa-stage,
+#naiwa-pet[data-mode="pose"][data-state="diagnose"] .naiwa-stage { animation: pet-tilt 2.6s ease-in-out infinite; }
+#naiwa-pet[data-mode="pose"][data-state="rewrite"] .naiwa-stage { animation: pet-trot .7s ease-in-out infinite; }
+#naiwa-pet[data-mode="pose"][data-state="wave"] .naiwa-stage,
+#naiwa-pet[data-mode="pose"][data-state="proud"] .naiwa-stage { animation: pet-hop .5s ease-in-out 2; }
+#naiwa-pet[data-mode="pose"][data-state="fly"] .naiwa-stage { animation: pet-fly 1.25s ease-in-out 1; }
+#naiwa-pet[data-mode="pose"][data-state="dance"] .naiwa-stage {
+  animation: pet-dance 1.5s ease-in-out 1;
+  transform-origin: 50% 60%;
+}
+#naiwa-pet[data-mode="pose"][data-state="sad"] .naiwa-stage {
+  animation: none;
+  transform: translateY(6px) rotate(2deg);
+  filter: saturate(.65);
+}
+/* 签名开心动作：牛来连跳 / 奶龙捧腹晃 / 蓝鲸跃出水面 */
+#naiwa-pet[data-mode="pose"][data-sig="hops"][data-state="laugh"] .naiwa-stage { animation: pet-hops .48s ease-in-out 4; }
+#naiwa-pet[data-mode="pose"][data-sig="sway"][data-state="laugh"] .naiwa-stage { animation: pet-swaybig .6s ease-in-out 4; }
+#naiwa-pet[data-mode="pose"][data-sig="breach"][data-state="laugh"] .naiwa-stage { animation: pet-breach 1.15s ease-in-out 1; }
+
+/* ---------- 设置页：桌宠形象画廊 ---------- */
+.pet-gallery-wrap { margin-top: 16px; flex: 1 1 100%; }
+.pet-gallery-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary, #333);
+  margin-bottom: 8px;
+}
+.pet-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 10px;
+}
+.pet-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 10px 6px 8px;
+  border: 1px solid var(--border, #e5e0d8);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+  cursor: pointer;
+  transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease;
+}
+.pet-card:hover { transform: translateY(-2px); }
+.pet-card[aria-checked="true"] {
+  border-color: var(--accent, #c2502a);
+  box-shadow: 0 0 0 2px var(--accent, #c2502a);
+}
+.pet-card-thumb {
+  width: 64px;
+  height: 70px;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+.pet-card-name { font-size: 13px; font-weight: 600; color: var(--text-primary, #333); }
+.pet-card-tag { font-size: 11px; color: var(--text-secondary, #8a8578); text-align: center; line-height: 1.35; }
+
+/* ---------- 逐帧立绘角色：静态行 CSS 辅助动作 / 反向跑镜像 / 转圈 ---------- */
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="runleft"] .naiwa-sprite { transform: scaleX(-1); }
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="sad"] .naiwa-stage {
+  animation: none;
+  transform: translateY(6px) rotate(2deg);
+  filter: saturate(.65);
+}
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="proud"] .naiwa-stage { animation: pet-hop .5s ease-in-out 2; }
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="wait"] .naiwa-stage { animation: pet-sway 3s ease-in-out infinite; }
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="think"] .naiwa-stage,
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="diagnose"] .naiwa-stage { animation: pet-tilt 2.6s ease-in-out infinite; }
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="dance"] .naiwa-stage {
+  animation: pet-dance 1.5s ease-in-out 1;
+  transform-origin: 50% 60%;
+}
+#naiwa-pet:is([data-pet="niulai"], [data-pet="whalegirl"], [data-pet="gptgirl"], [data-pet="claudegirl"], [data-pet="geminigirl"], [data-pet="grokgirl"])[data-state="rewrite"] .naiwa-stage { animation: pet-bob .9s ease-in-out infinite; }
+
+/* 减少动态效果：静止呈现 */
+@media (prefers-reduced-motion: reduce) {
+  #naiwa-pet .naiwa-pose,
+  #naiwa-pet .naiwa-stage { animation: none !important; }
+  #naiwa-pet .naiwa-sprite { transition: none; }
+  .naiwa-bubble { transition: none; }
+}
+
+/* 复合动作运动曲线：与逐帧行同时长叠加，transform 独立于背景步进，慢而平滑 */
+.naiwa-sprite { transform-origin: 50% 100%; }
+@keyframes pet-act-hop {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  18%      { transform: translateY(-16px) scaleY(1.04); }
+  38%      { transform: translateY(0) scaleY(.96); }
+  58%      { transform: translateY(-12px) scaleY(1.03); }
+  80%      { transform: translateY(0) scaleY(.98); }
+}
+@keyframes pet-act-spin {
+  0%   { transform: rotate(0deg) scale(1); }
+  50%  { transform: rotate(180deg) scale(.94); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+@keyframes pet-act-bow {
+  0%, 100% { transform: rotate(0deg); }
+  35%      { transform: rotate(-14deg) translateY(2px); }
+  65%      { transform: rotate(-10deg) translateY(1px); }
+}
+@keyframes pet-act-peek {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  30%      { transform: translateX(14px) rotate(3deg); }
+  70%      { transform: translateX(-14px) rotate(-3deg); }
+}
+@keyframes pet-act-stretch {
+  0%, 100% { transform: scaleY(1) scaleX(1); }
+  40%      { transform: scaleY(1.09) scaleX(.97); }
+  70%      { transform: scaleY(1.03) scaleX(.99); }
+}
+/* 安静循环态的呼吸微动：掩盖逐帧步进感 */
+@keyframes pet-breath {
+  0%, 100% { transform: scaleY(1); }
+  50%      { transform: scaleY(1.02) translateY(-1px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  #naiwa-pet .naiwa-sprite { animation: none !important; }
+}

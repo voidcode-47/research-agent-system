@@ -17,7 +17,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SECRET_ALLOWED = {".env"}
 
 SKIP_DIRS = {"__pycache__", ".pytest_cache", ".git", ".venv", "venv", "env"}
-SKIP_SUFFIXES = {".pyc", ".pyo", ".bin", ".sqlite3", ".db", ".docx"}
+# 二进制文件按文本扫描会把随机字节误判为邮箱/密钥，统一跳过
+SKIP_SUFFIXES = {
+    ".pyc", ".pyo", ".bin", ".sqlite3", ".db", ".docx",
+    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".ico", ".bmp",
+    ".m4a", ".mp3", ".wav", ".ogg", ".mp4", ".webm",
+    ".woff", ".woff2", ".ttf", ".otf",
+    ".gz", ".zip", ".pdf",
+}
 # 本地运行时数据（已 gitignore），包含用户上传内容，不属于可公开文件
 SKIP_DATA_PREFIXES = (
     "data/papers/", "data/reports/", "data/uploads/",
