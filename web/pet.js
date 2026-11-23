@@ -766,7 +766,8 @@
   }
   function onEnter(name, now) {
     // sheet 角色没有的立绘态（如 dance）映射到招牌跳笑，避免"气泡说转圈、身体站 idle"的错配
-    if (pet.mode === "sheet" && !pet.states[name] && !(pet.poses && pet.poses[name])) {
+    // look 是注视帧态（不在 states 里），帧由渲染循环处理，不能当缺失态兜底
+    if (pet.mode === "sheet" && name !== "look" && !pet.states[name] && !(pet.poses && pet.poses[name])) {
       name = pet.states.laugh ? "laugh" : "idle";
     }
     animStart = now;

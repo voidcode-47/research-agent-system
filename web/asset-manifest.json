@@ -1,5 +1,5 @@
 {
-  "version": "99f293f483cb",
+  "version": "da9dcf509446",
   "files": {
     "appearance.js": "4a052ec7cfd6",
     "style.css": "48133879a536",
@@ -7,6 +7,6 @@
     "pet.css": "a07d62172576",
     "app.js": "7f3872f7171e",
     "paper.js": "e993d241b2f1",
-    "pet.js": "b4214854a09b"
+    "pet.js": "011588796007"
   }
 }
