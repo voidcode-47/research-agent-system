@@ -353,7 +353,7 @@ function renderResearchRefs(refs) {
 
 $("btn-research").addEventListener("click", async () => {
   const topic = $("research-topic").value.trim();
-  if (!topic) { alert("请输入论文方向或研究主题"); return; }
+  if (!topic) { pwAlert("请输入论文方向或研究主题", "warn"); return; }
   if (researchPoll) { clearInterval(researchPoll); researchPoll = null; }
 
   lastRefsKey = "";
@@ -397,7 +397,7 @@ $("btn-research-cancel").addEventListener("click", async () => {
     }
   } catch (e) {
     $("btn-research-cancel").disabled = false;
-    alert(`取消失败：${e.message}`);
+    pwAlert(`取消失败：${e.message}`, "err");
   }
 });
 
@@ -497,7 +497,7 @@ $("btn-copy").addEventListener("click", async () => {
     const b = $("btn-copy"); const old = b.textContent;
     b.textContent = "✅ 已复制";
     setTimeout(() => (b.textContent = old), 1200);
-  } catch (e) { alert("复制失败，请手动选择文本复制"); }
+  } catch (e) { pwAlert("复制失败，请手动选择文本复制", "warn"); }
 });
 
 // 追问
@@ -582,7 +582,7 @@ $("report-list").addEventListener("click", async (e) => {
     try {
       await api(`/api/reports/${encodeURIComponent(name)}`, { method: "DELETE" });
       loadReports();
-    } catch (err) { alert(`删除失败：${err.message}`); }
+    } catch (err) { pwAlert(`删除失败：${err.message}`, "err"); }
   }
 });
 

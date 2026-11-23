@@ -198,6 +198,25 @@ body { font-family: var(--font-ui); }
 .paper-alert.ok, .chip.oa { background: var(--success-bg); border-color: var(--success-border); color: var(--success); }
 .paper-alert.warn, .paper-warning { background: var(--warning-bg); border-color: var(--warning-border); color: var(--warning); }
 .paper-alert.err, .batch-item.err { border-color: var(--danger-border); }
+
+/* 错误 / 警告弹窗：四套主题各自调整阴影、圆角与遮罩浓度 */
+.alert-dialog { border-radius: var(--radius-lg); }
+.alert-dialog-mark { border-radius: max(9px, calc(var(--radius) - 1px)); }
+:root[data-theme="paper"] .alert-dialog { box-shadow: 0 26px 70px #243b3526; }
+:root[data-theme="paper"] .alert-dialog::backdrop { background: #243b3540; }
+:root[data-theme="ink"] .alert-dialog {
+  background: #232830; border-color: #3d444e; border-top-color: var(--alert-accent);
+  box-shadow: 0 26px 80px #00000080;
+}
+:root[data-theme="ink"] .alert-dialog::backdrop { background: #06090dc7; }
+:root[data-theme="ink"] .alert-dialog-message { color: #c4cbd5; }
+:root[data-theme="mist"] .alert-dialog { box-shadow: 0 22px 58px #254c7629; }
+:root[data-theme="mist"] .alert-dialog::backdrop { background: #1e3a5547; backdrop-filter: blur(3px); }
+:root[data-theme="mist"] .alert-dialog-actions .btn-primary { border-radius: 6px; }
+:root[data-theme="iris"] .alert-dialog { box-shadow: 0 26px 68px #6a408332; }
+:root[data-theme="iris"] .alert-dialog-mark { border-radius: 14px; }
+:root[data-theme="iris"] .alert-dialog-actions .btn-primary { border-radius: 999px; }
+:root[data-motion="off"] .alert-dialog[open], :root[data-motion="off"] .alert-dialog::backdrop { animation: none; }
 .paper-total b.warn, .paper-dim-card.warn .dim-head b, .ref-problem { color: var(--warning); }
 .paper-stale, .tag-missing, .sev-medium .sev-tag { background: var(--warning-bg); color: var(--warning); }
 .paper-dim-card.warn, .issue-item.sev-medium { border-left-color: var(--warning); }

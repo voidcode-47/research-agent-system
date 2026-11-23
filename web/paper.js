@@ -77,17 +77,61 @@ const PAPER_MODE_LABELS = {
 };
 
 // ---------- 通用 ----------
+let paperAlertClosedMsg = "";
+let paperAlertClosedAt = 0;
+
 function pwAlert(msg, kind, step) {
   // step 用于异步回调：只在对应步骤仍处于激活状态时展示，避免旧步骤提示串到新步骤
   if (msg && step != null && step !== paperState.step) return;
   const el = $("paper-alert");
   el.textContent = msg || "";
   el.className = "paper-alert" + (kind ? " " + kind : "");
-  el.classList.toggle("hidden", !msg);
+  const popup = kind === "err" || kind === "warn";
+  // 错误与警告改成居中弹窗，成功提示仍保留顶部轻量内联条
+  el.classList.toggle("hidden", !msg || popup);
+  if (!msg) {
+    pwCloseAlertDialog();
+    return;
+  }
+  if (popup) pwShowAlertDialog(msg, kind);
+  else pwCloseAlertDialog();
+}
+
+function pwShowAlertDialog(msg, kind) {
+  const dialog = $("paper-alert-dialog");
+  if (!dialog) return;
+  const key = kind + ":" + msg;
+  // 用户刚关掉同一条提示时不要被轮询重新弹出来，避免反复打断
+  if (!dialog.open && key === paperAlertClosedMsg && Date.now() - paperAlertClosedAt < 8000) return;
+  const isWarn = kind === "warn";
+  $("paper-alert-title").textContent = isWarn ? "请确认" : "操作未完成";
+  $("paper-alert-message").textContent = msg;
+  dialog.classList.toggle("is-warn", isWarn);
+  dialog.classList.toggle("is-err", !isWarn);
+  if (dialog.open) return;
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+  const closeBtn = $("btn-paper-alert-close");
+  if (closeBtn && typeof closeBtn.focus === "function") closeBtn.focus();
+}
+
+function pwCloseAlertDialog() {
+  const dialog = $("paper-alert-dialog");
+  if (!dialog) return;
+  const msg = $("paper-alert-message").textContent;
+  const kind = dialog.classList.contains("is-warn") ? "warn" : "err";
+  if (msg) {
+    paperAlertClosedMsg = kind + ":" + msg;
+    paperAlertClosedAt = Date.now();
+  }
+  if (!dialog.open) return;
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
 }
 
 function pwHideAlert() {
   $("paper-alert").classList.add("hidden");
+  pwCloseAlertDialog();
 }
 
 function pwRewriteLimit() {
@@ -350,6 +394,19 @@ function pwDiagCancelReset() {
 async function initPaperPage() {
   if (paperState.inited) return;
   paperState.inited = true;
+
+  $("btn-paper-alert-close").addEventListener("click", pwCloseAlertDialog);
+  $("paper-alert-dialog").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) pwCloseAlertDialog();
+  });
+  // 用 Esc 关闭原生 dialog 时也要记住这条提示，避免轮询立刻重新弹出
+  $("paper-alert-dialog").addEventListener("close", () => {
+    const msg = $("paper-alert-message").textContent;
+    if (!msg) return;
+    const kind = $("paper-alert-dialog").classList.contains("is-warn") ? "warn" : "err";
+    paperAlertClosedMsg = kind + ":" + msg;
+    paperAlertClosedAt = Date.now();
+  });
 
   $("btn-paper-upload").addEventListener("click", () => pwUpload().catch(pwError));
   $("paper-file").addEventListener("change", pwUpdateFileChoice);

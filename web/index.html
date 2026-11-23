@@ -6,8 +6,8 @@
 <title>论文诊断与优化工作台</title>
 <link rel="icon" href="data:,">
 <script src="/appearance.js?v=4a052ec7cfd6"></script>
-<link rel="stylesheet" href="/style.css?v=48133879a536">
-<link rel="stylesheet" href="/appearance.css?v=7c5b5eadecb9">
+<link rel="stylesheet" href="/style.css?v=5add6033e737">
+<link rel="stylesheet" href="/appearance.css?v=e27f2e6a68c5">
 <link rel="stylesheet" href="/pet.css?v=a07d62172576">
 </head>
 <body>
@@ -826,8 +826,26 @@
   <article id="report-preview-body" class="markdown"></article>
 </dialog>
 
-<script src="/app.js?v=7f3872f7171e"></script>
-<script src="/paper.js?v=e993d241b2f1"></script>
+<dialog id="paper-alert-dialog" class="alert-dialog" aria-labelledby="paper-alert-title" aria-describedby="paper-alert-message">
+  <div class="alert-dialog-inner">
+    <span class="alert-dialog-mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M12 7.6v5.6M12 16.6v.01"/>
+      </svg>
+    </span>
+    <div class="alert-dialog-copy">
+      <h2 id="paper-alert-title" class="alert-dialog-title">操作未完成</h2>
+      <p id="paper-alert-message" class="alert-dialog-message"></p>
+    </div>
+  </div>
+  <div class="alert-dialog-actions">
+    <button type="button" id="btn-paper-alert-close" class="btn btn-primary">知道了</button>
+  </div>
+</dialog>
+
+<script src="/app.js?v=12b3b74bf227"></script>
+<script src="/paper.js?v=4e28a39baf5f"></script>
 <script src="/pet.js?v=011588796007"></script>
 </body>
 </html>

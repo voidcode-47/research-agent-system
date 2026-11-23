@@ -273,6 +273,54 @@ select.input { cursor: pointer; }
 .paper-alert.warn { border-color: #efd9a8; background: #fdf8ec; color: #8a5a12; }
 .paper-alert.err { border-color: #efc3be; background: var(--danger-bg); color: var(--danger); }
 
+/* 错误 / 警告使用居中弹窗，避免只在上方窄条里一闪而过 */
+.alert-dialog {
+  --alert-accent: var(--danger);
+  --alert-accent-bg: var(--danger-bg);
+  --alert-accent-border: var(--danger-border);
+  width: min(430px, calc(100vw - 32px));
+  max-height: min(78dvh, 560px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--alert-accent);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-md);
+  overflow: auto;
+}
+.alert-dialog.is-warn {
+  --alert-accent: var(--warning);
+  --alert-accent-bg: var(--warning-bg);
+  --alert-accent-border: var(--warning-border);
+}
+.alert-dialog[open] { animation: modal-in 0.22s ease; }
+.alert-dialog::backdrop {
+  background: rgba(28, 25, 23, 0.38);
+  animation: fade-in 0.18s ease;
+}
+.alert-dialog-inner { display: flex; align-items: flex-start; gap: 14px; padding: 24px 24px 2px; }
+.alert-dialog-mark {
+  flex: none; display: grid; place-items: center;
+  width: 38px; height: 38px; border-radius: 50%;
+  background: var(--alert-accent-bg);
+  border: 1px solid var(--alert-accent-border);
+  color: var(--alert-accent);
+}
+.alert-dialog-copy { min-width: 0; }
+.alert-dialog-title { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; margin: 3px 0 6px; }
+.alert-dialog-message {
+  font-size: 13.5px; line-height: 1.75; color: var(--text-secondary);
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.alert-dialog-actions { display: flex; justify-content: flex-end; padding: 18px 24px 22px; }
+.alert-dialog-actions .btn { min-width: 96px; }
+@media (max-width: 480px) {
+  .alert-dialog-inner { padding: 20px 18px 2px; gap: 12px; }
+  .alert-dialog-actions { padding: 16px 18px 18px; }
+}
+
 /* ============ ① 上传 ============ */
 .upload-zone {
   position: relative;
