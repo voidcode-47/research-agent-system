@@ -25,7 +25,7 @@
   const PETS = {
     naiwa: {
       label: "奶蛙", tag: "呱呱陪写论文", mode: "sheet", greet: "我来陪你写论文~",
-      sheet: "assets/naiwa/spritesheet.webp?v=notail2", cols: 8, rows: 11, cellW: 192, cellH: 208,
+      sheet: "assets/naiwa/spritesheet.webp?v=notail3", cols: 8, rows: 11, cellW: 192, cellH: 208,
       states: {
         idle:    { row: 0, frames: 7, fps: 5,  loop: true },
         search:  { row: 1, frames: 8, fps: 7.5,  loop: true },
@@ -47,7 +47,7 @@
       },
       look: { row: 9, frames: 16 },
       poses: {
-        diagnose: "assets/naiwa/pose-diagnose.png?v=notail2",
+        diagnose: "assets/naiwa/pose-diagnose.png?v=notail3",
         rewrite: "assets/naiwa/pose-rewrite.png",
       },
       task: { upload: "wait", diagnose: "diagnose", similar: "search", rewrite: "rewrite", batch: "rewrite", ask: "think", export: "wait", backup: "wait", format: "think", guideline: "think", research: "search" },
