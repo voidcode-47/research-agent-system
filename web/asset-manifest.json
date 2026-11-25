@@ -1,12 +1,12 @@
 {
-  "version": "d1d7744c9882",
+  "version": "26e39165feb4",
   "files": {
     "appearance.js": "4a052ec7cfd6",
     "style.css": "5add6033e737",
     "appearance.css": "e27f2e6a68c5",
-    "pet.css": "a07d62172576",
+    "pet.css": "07464ed364fa",
     "app.js": "12b3b74bf227",
     "paper.js": "4e28a39baf5f",
-    "pet.js": "011588796007"
+    "pet.js": "ad8292798039"
   }
 }

@@ -65,7 +65,7 @@
   width: 144px;
   height: 156px;
   margin-left: -72px;
-  background-image: url("assets/naiwa/spritesheet.webp");
+  background-image: url("assets/naiwa/spritesheet.webp?v=notail1");
   background-repeat: no-repeat;
   background-size: 1152px 1716px; /* 1536×2288 × 0.75 */
   image-rendering: auto;
@@ -155,7 +155,7 @@
   border-radius: 50%;
   border: 1px solid var(--border, #e5e0d8);
   background-color: var(--surface, #fff);
-  background-image: url("assets/naiwa/spritesheet.webp");
+  background-image: url("assets/naiwa/spritesheet.webp?v=notail1");
   background-repeat: no-repeat;
   background-size: 384px 572px; /* 1536×2288 × 0.25 */
   background-position: -14px -10px;
